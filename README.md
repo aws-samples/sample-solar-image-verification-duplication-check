@@ -6,46 +6,7 @@ A serverless AWS application for the **Ministry of New and Renewable Energy (MNR
 
 ## Architecture
 
-```
-┌─────────────────────────────────────────────────────────────────────────────────┐
-│                              MNRE Solar Panel Verification                       │
-├─────────────────────────────────────────────────────────────────────────────────┤
-│                                                                                 │
-│  ┌──────────┐     ┌────────────┐     ┌──────────────┐                          │
-│  │  React   │────▶│ CloudFront │────▶│  S3 (Static  │                          │
-│  │   SPA    │     │    CDN     │     │   Hosting)   │                          │
-│  └──────────┘     └────────────┘     └──────────────┘                          │
-│       │                                                                         │
-│       │  API Calls                                                              │
-│       ▼                                                                         │
-│  ┌─────────────────┐                                                           │
-│  │  API Gateway    │                                                           │
-│  │  (REST API)     │                                                           │
-│  ├─────────────────┤                                                           │
-│  │ POST /upload    │──▶ Upload Lambda ──▶ S3 (Pre-signed URL)                  │
-│  │ POST /confirm   │──▶ Confirm Lambda ──▶ Step Functions                      │
-│  │ GET  /status/{} │──▶ GetStatus Lambda ──▶ DynamoDB                          │
-│  │ GET  /submissions│──▶ GetStatus Lambda ──▶ DynamoDB (GSI query)             │
-│  └─────────────────┘                                                           │
-│                                                                                 │
-│  ┌─────────────────────────────────────────────────────────────────────────┐   │
-│  │                    Step Functions State Machine                          │   │
-│  │                                                                         │   │
-│  │  ┌──────────┐    ┌───────────┐    ┌──────────────┐    ┌────────────┐   │   │
-│  │  │ Quality  │───▶│Duplication│───▶│   Custom     │───▶│   Index    │   │   │
-│  │  │  Check   │    │   Check   │    │   Checks     │    │   Image    │   │   │
-│  │  └──────────┘    └───────────┘    └──────────────┘    └────────────┘   │   │
-│  │       │                │                 │                    │          │   │
-│  │       │ Rekognition    │ Titan           │ Claude Opus 4.7   │ DynamoDB │   │
-│  │       │                │ Embeddings      │ (Vision)          │          │   │
-│  │       ▼                ▼                 ▼                    ▼          │   │
-│  │  ┌──────────────────────────────────────────────────────────────────┐   │   │
-│  │  │                    Store Result (DynamoDB)                        │   │   │
-│  │  └──────────────────────────────────────────────────────────────────┘   │   │
-│  └─────────────────────────────────────────────────────────────────────────┘   │
-│                                                                                 │
-└─────────────────────────────────────────────────────────────────────────────────┘
-```
+<img width="1184" height="831" alt="image" src="https://github.com/user-attachments/assets/c84a44fe-1cb4-4688-a200-7997c1755516" />
 
 ---
 
