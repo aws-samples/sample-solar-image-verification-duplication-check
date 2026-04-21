@@ -5,11 +5,8 @@ A serverless AWS application for the **Ministry of New and Renewable Energy (MNR
 ---
 
 ## Architecture
-
 <img width="1621" height="1152" alt="mnre-solar-panel-architecture drawio" src="https://github.com/user-attachments/assets/788f0872-5df7-4768-964b-3e8e8731cd11" />
-
-Step Functions Machine Orchestration:
-
+Step Functions Machine Orchestration
 <img width="1423" height="1600" alt="image" src="https://github.com/user-attachments/assets/6cca736e-b96c-47ca-a2a0-8881d162e6a7" />
 
 
