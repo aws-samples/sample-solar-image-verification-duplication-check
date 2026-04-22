@@ -34,6 +34,13 @@ export interface CustomCheckResult {
     manipulation_signs: string[];
     notes: string;
   };
+  watermark: {
+    has_watermark: boolean;
+    is_internet_sourced: boolean;
+    confidence: string;
+    detected_marks: string[];
+    notes: string;
+  };
   reason?: string;
 }
 

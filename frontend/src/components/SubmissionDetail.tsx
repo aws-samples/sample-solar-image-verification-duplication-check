@@ -85,11 +85,14 @@ export default function SubmissionDetail({ submission }: SubmissionDetailProps) 
   );
   const duplicationPassed = duplicationCheckResult ? duplicationCheckResult.maxSimilarity < 0.95 : false;
 
+  const customPassed = customCheckResult
+    ? customCheckResult.inclination?.acceptable && customCheckResult.authenticity?.is_authentic && !customCheckResult.watermark?.has_watermark && !customCheckResult.watermark?.is_internet_sourced
+    : false;
   const customStatus = getStepStatus(
-    customCheckResult ? { passed: customCheckResult.inclination?.acceptable && customCheckResult.authenticity?.is_authentic } : undefined,
+    customCheckResult ? { passed: customPassed } : undefined,
     qualityPassed && duplicationPassed, isProcessing,
   );
-  const allPassed = qualityPassed && duplicationPassed && customCheckResult?.inclination?.acceptable && customCheckResult?.authenticity?.is_authentic;
+  const allPassed = qualityPassed && duplicationPassed && customPassed;
 
   const indexStatus: StepStatus = allPassed ? 'pass' : 'pending';
   const finalStatus: StepStatus = submission.status === 'ACCEPTED' ? 'pass' : submission.status === 'REJECTED' ? 'fail' : 'pending';
@@ -180,7 +183,7 @@ export default function SubmissionDetail({ submission }: SubmissionDetailProps) 
           ) : null}
         </PipelineStep>
 
-        <PipelineStep status={customStatus} index={2} title="Custom Checks" subtitle="Claude Opus 4.7">
+        <PipelineStep status={customStatus} index={2} title="Custom Checks" subtitle="Gemma 3 12B IT">
           {customCheckResult ? (
             <div className="pipeline-detail">
               {customCheckResult.inclination && (
@@ -212,6 +215,31 @@ export default function SubmissionDetail({ submission }: SubmissionDetailProps) 
                     </div>
                   )}
                   {customCheckResult.authenticity.notes && <p className="notes-text">{customCheckResult.authenticity.notes}</p>}
+                </>
+              )}
+              {customCheckResult.watermark && (
+                <>
+                  <p style={{ marginTop: '0.4rem' }}>
+                    <strong>Watermark: </strong>
+                    <span className={`metric-value ${!customCheckResult.watermark.has_watermark ? 'pass' : 'fail'}`}>
+                      {customCheckResult.watermark.has_watermark ? 'Detected' : 'None'}
+                    </span>
+                    <span className="metric-unit"> ({customCheckResult.watermark.confidence})</span>
+                  </p>
+                  <p style={{ marginTop: '0.2rem' }}>
+                    <strong>Internet Sourced: </strong>
+                    <span className={`metric-value ${!customCheckResult.watermark.is_internet_sourced ? 'pass' : 'fail'}`}>
+                      {customCheckResult.watermark.is_internet_sourced ? 'Yes' : 'No'}
+                    </span>
+                  </p>
+                  {customCheckResult.watermark.detected_marks.length > 0 && (
+                    <div className="labels">
+                      {customCheckResult.watermark.detected_marks.map((m) => (
+                        <span key={m} className="label-tag danger">{m}</span>
+                      ))}
+                    </div>
+                  )}
+                  {customCheckResult.watermark.notes && <p className="notes-text">{customCheckResult.watermark.notes}</p>}
                 </>
               )}
               {customCheckResult.reason && (

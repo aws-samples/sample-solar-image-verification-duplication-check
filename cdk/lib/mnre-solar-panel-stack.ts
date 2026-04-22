@@ -128,7 +128,7 @@ export class MnreSolarPanelStack extends cdk.Stack {
       resources: ['arn:aws:bedrock:*::foundation-model/amazon.titan-embed-image-v1'],
     }));
 
-    // ─── Lambda: Custom Checks ───
+    // ─── Lambda: Custom Checks (Gemma 3 12B IT via Bedrock) ───
     const customChecksFn = new lambda.Function(this, 'CustomChecksFunction', {
       ...lambdaDefaults,
       code: lambda.Code.fromAsset(path.join(__dirname, '../../lambdas/custom_checks')),
@@ -141,12 +141,9 @@ export class MnreSolarPanelStack extends cdk.Stack {
     imageBucket.grantRead(customChecksFn);
     submissionsTable.grantWriteData(customChecksFn);
     customChecksFn.addToRolePolicy(new iam.PolicyStatement({
-      actions: ['bedrock:InvokeModel'],
+      actions: ['bedrock:InvokeModel', 'bedrock:Converse'],
       resources: [
-        'arn:aws:bedrock:*:*:inference-profile/global.anthropic.claude-opus-4-7',
-        'arn:aws:bedrock:*:*:inference-profile/apac.anthropic.claude-sonnet-4-20250514-v1:0',
-        'arn:aws:bedrock:*::foundation-model/anthropic.claude-opus-4-7-v1:0',
-        'arn:aws:bedrock:*::foundation-model/anthropic.claude-sonnet-4-20250514-v1:0',
+        'arn:aws:bedrock:*::foundation-model/google.gemma-3-12b-it',
       ],
     }));
 

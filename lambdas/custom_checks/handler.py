@@ -1,4 +1,3 @@
-import base64
 import json
 import os
 import re
@@ -29,6 +28,15 @@ Examine the image for signs of digital manipulation including:
 - Compression artifacts inconsistent with a single capture
 - Signs of image compositing or splicing
 
+Check 3 - Watermark & Internet Sourcing:
+ONLY flag this check if you see concrete, visible evidence of watermarks or internet sourcing. Do NOT flag based on image quality, composition style, or professionalism alone — real installations can be photographed with good cameras.
+Flag ONLY if you see:
+- Visible watermark text, logos, or semi-transparent stamps overlaid on the image
+- Stock photo agency identifiers physically present in the image (Getty, Shutterstock, iStock, Adobe Stock text/logos)
+- Visible URL or website text embedded/overlaid on the image
+- Screenshot artifacts (browser chrome, address bars, status bars, UI elements)
+Do NOT consider high resolution, good lighting, clean composition, or professional quality as evidence of internet sourcing. Set is_internet_sourced to false unless you see explicit visual proof listed above.
+
 Respond ONLY with this JSON (no additional text):
 {
   "inclination": {
@@ -42,13 +50,15 @@ Respond ONLY with this JSON (no additional text):
     "confidence": "<high|medium|low>",
     "manipulation_signs": ["<sign1>", "<sign2>"],
     "notes": "<brief explanation>"
+  },
+  "watermark": {
+    "has_watermark": <boolean>,
+    "is_internet_sourced": <boolean>,
+    "confidence": "<high|medium|low>",
+    "detected_marks": ["<mark1>", "<mark2>"],
+    "notes": "<brief explanation>"
   }
 }"""
-
-MODEL_IDS = [
-    'global.anthropic.claude-opus-4-7',
-    'apac.anthropic.claude-sonnet-4-20250514-v1:0',
-]
 
 
 def get_media_type(key: str) -> str:
@@ -68,45 +78,42 @@ def parse_json_response(text: str) -> dict:
     return json.loads(cleaned)
 
 
-def invoke_claude(base64_image: str, media_type: str) -> dict:
-    body = json.dumps({
-        'anthropic_version': 'bedrock-2023-05-31',
-        'max_tokens': 1024,
-        'messages': [{
+MODEL_ID = 'google.gemma-3-12b-it'
+
+MEDIA_TYPE_MAP = {
+    'image/jpeg': 'jpeg',
+    'image/png': 'png',
+    'image/webp': 'webp',
+}
+
+
+def invoke_gemma(image_bytes: bytes, media_type: str) -> dict:
+    format_str = MEDIA_TYPE_MAP.get(media_type, 'jpeg')
+
+    response = bedrock.converse(
+        modelId=MODEL_ID,
+        messages=[{
             'role': 'user',
             'content': [
                 {
-                    'type': 'image',
-                    'source': {
-                        'type': 'base64',
-                        'media_type': media_type,
-                        'data': base64_image,
+                    'image': {
+                        'format': format_str,
+                        'source': {'bytes': image_bytes},
                     },
                 },
                 {
-                    'type': 'text',
                     'text': ANALYSIS_PROMPT,
                 },
             ],
         }],
-    })
+        inferenceConfig={
+            'maxTokens': 1024,
+            'temperature': 0.1,
+        },
+    )
 
-    last_error = None
-    for model_id in MODEL_IDS:
-        try:
-            response = bedrock.invoke_model(
-                modelId=model_id,
-                contentType='application/json',
-                accept='application/json',
-                body=body,
-            )
-            result = json.loads(response['body'].read())
-            return parse_json_response(result['content'][0]['text'])
-        except Exception as e:
-            last_error = e
-            continue
-
-    raise last_error
+    text = response['output']['message']['content'][0]['text']
+    return parse_json_response(text)
 
 
 def lambda_handler(event, context):
@@ -116,14 +123,15 @@ def lambda_handler(event, context):
 
     obj = s3.get_object(Bucket=s3_bucket, Key=s3_key)
     image_bytes = obj['Body'].read()
-    base64_image = base64.b64encode(image_bytes).decode('utf-8')
     media_type = get_media_type(s3_key)
 
-    analysis = invoke_claude(base64_image, media_type)
+    analysis = invoke_gemma(image_bytes, media_type)
 
     inclination_ok = analysis.get('inclination', {}).get('acceptable', False)
     authenticity_ok = analysis.get('authenticity', {}).get('is_authentic', False)
-    passed = inclination_ok and authenticity_ok
+    watermark = analysis.get('watermark', {})
+    watermark_ok = not watermark.get('has_watermark', False) and not watermark.get('is_internet_sourced', False)
+    passed = inclination_ok and authenticity_ok and watermark_ok
 
     reasons = []
     if not inclination_ok:
@@ -132,11 +140,18 @@ def lambda_handler(event, context):
     if not authenticity_ok:
         signs = analysis.get('authenticity', {}).get('manipulation_signs', [])
         reasons.append(f"Image manipulation detected: {', '.join(signs)}")
+    if not watermark_ok:
+        marks = watermark.get('detected_marks', [])
+        if watermark.get('has_watermark'):
+            reasons.append(f"Watermark detected: {', '.join(marks) if marks else 'visible watermark found'}")
+        if watermark.get('is_internet_sourced'):
+            reasons.append("Image appears to be sourced from the internet")
 
     result = {
         'passed': passed,
         'inclination': analysis.get('inclination', {}),
         'authenticity': analysis.get('authenticity', {}),
+        'watermark': watermark,
         'reason': '; '.join(reasons) if reasons else None,
     }
 
