@@ -39,3 +39,22 @@ def ensure_jpeg_bytes(image_bytes: bytes) -> bytes:
     buf = io.BytesIO()
     img.save(buf, format='JPEG', quality=92)
     return buf.getvalue()
+
+
+def normalize_name(name: str) -> str:
+    if not name:
+        return ''
+    return ''.join(c for c in name.lower() if c.isalnum() or c.isspace()).strip()
+
+
+def name_similarity(a: str, b: str) -> float:
+    a, b = normalize_name(a), normalize_name(b)
+    if not a or not b:
+        return 0.0
+    tokens_a = set(a.split())
+    tokens_b = set(b.split())
+    if not tokens_a or not tokens_b:
+        return 0.0
+    intersection = tokens_a & tokens_b
+    union = tokens_a | tokens_b
+    return len(intersection) / len(union)

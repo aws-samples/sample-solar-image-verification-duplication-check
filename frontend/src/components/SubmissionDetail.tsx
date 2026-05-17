@@ -1,9 +1,12 @@
 import { motion, AnimatePresence } from 'framer-motion';
 import type { Submission } from '../types';
 import StatusBadge from './StatusBadge';
+import ChequeUpload from './ChequeUpload';
+import ChequeValidationPanel from './ChequeValidationPanel';
 
 interface SubmissionDetailProps {
   submission: Submission;
+  onChequeChange?: () => void;
 }
 
 type StepStatus = 'pass' | 'fail' | 'active' | 'pending';
@@ -71,7 +74,7 @@ function PipelineStep({ status, index, title, subtitle, children }: {
   );
 }
 
-export default function SubmissionDetail({ submission }: SubmissionDetailProps) {
+export default function SubmissionDetail({ submission, onChequeChange }: SubmissionDetailProps) {
   const { qualityCheckResult, duplicationCheckResult, customCheckResult } = submission;
   const isProcessing = submission.status === 'PROCESSING' || submission.status === 'PENDING';
 
@@ -265,6 +268,25 @@ export default function SubmissionDetail({ submission }: SubmissionDetailProps) 
           ) : null}
         </PipelineStep>
       </div>
+
+      {submission.status === 'ACCEPTED' && (!submission.paymentStatus || submission.paymentStatus === 'PENDING_CHEQUE') && (
+        <ChequeUpload
+          submissionId={submission.submissionId}
+          onUploadComplete={() => onChequeChange?.()}
+        />
+      )}
+
+      {submission.status === 'ACCEPTED' && submission.paymentStatus && submission.paymentStatus !== 'PENDING_CHEQUE' && (
+        <ChequeValidationPanel
+          submissionId={submission.submissionId}
+          paymentStatus={submission.paymentStatus}
+          result={submission.chequeValidationResult}
+          expectedHolderName={submission.expectedHolderName}
+          reviewedBy={submission.paymentReviewedBy}
+          reviewNotes={submission.paymentReviewNotes}
+          onReviewSubmitted={() => onChequeChange?.()}
+        />
+      )}
     </div>
   );
 }

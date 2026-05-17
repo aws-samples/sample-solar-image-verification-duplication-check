@@ -54,8 +54,14 @@ def format_submission(item: dict) -> dict:
         'uploadedAt': item.get('uploadedAt', ''),
         'completedAt': item.get('completedAt'),
         'rejectionReason': item.get('rejectionReason'),
+        'paymentStatus': item.get('paymentStatus'),
+        'expectedHolderName': item.get('expectedHolderName'),
+        'chequeUploadedAt': item.get('chequeUploadedAt'),
+        'paymentDecidedAt': item.get('paymentDecidedAt'),
+        'paymentReviewedBy': item.get('paymentReviewedBy'),
+        'paymentReviewNotes': item.get('paymentReviewNotes'),
     }
-    for key in ('qualityCheckResult', 'duplicationCheckResult', 'customCheckResult'):
+    for key in ('qualityCheckResult', 'duplicationCheckResult', 'customCheckResult', 'chequeValidationResult'):
         if key in item:
             try:
                 result[key] = json.loads(item[key]) if isinstance(item[key], str) else item[key]

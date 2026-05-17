@@ -1,5 +1,5 @@
 import axios from 'axios';
-import type { Submission, UploadResponse } from '../types';
+import type { Submission, UploadResponse, ChequeUploadResponse } from '../types';
 
 const API_BASE = import.meta.env.VITE_API_URL || '';
 
@@ -37,4 +37,32 @@ export async function getSubmissionStatus(submissionId: string): Promise<Submiss
 export async function getUserSubmissions(userId: string): Promise<Submission[]> {
   const { data } = await axios.get(`${API_BASE}/submissions`, { params: { userId } });
   return parseBody<Submission[]>(data);
+}
+
+export async function requestChequeUpload(
+  submissionId: string,
+  fileName: string,
+  contentType: string,
+  expectedHolderName: string,
+): Promise<ChequeUploadResponse> {
+  const { data } = await axios.post(`${API_BASE}/cheque-upload`, {
+    submissionId,
+    fileName,
+    contentType,
+    expectedHolderName,
+  });
+  return parseBody<ChequeUploadResponse>(data);
+}
+
+export async function confirmChequeUpload(submissionId: string): Promise<void> {
+  await axios.post(`${API_BASE}/cheque-confirm`, { submissionId });
+}
+
+export async function submitChequeReview(
+  submissionId: string,
+  decision: 'APPROVED' | 'DECLINED',
+  reviewer: string,
+  notes: string,
+): Promise<void> {
+  await axios.post(`${API_BASE}/cheque-review/${submissionId}`, { decision, reviewer, notes });
 }

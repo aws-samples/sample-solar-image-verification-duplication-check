@@ -163,7 +163,18 @@ export default function App() {
                   Verification Pipeline
                 </div>
                 <div className="card-body">
-                  <SubmissionDetail submission={activeSubmission} />
+                  <SubmissionDetail
+                    submission={activeSubmission}
+                    onChequeChange={async () => {
+                      try {
+                        const updated = await getSubmissionStatus(activeSubmission.submissionId);
+                        setActiveSubmission(updated);
+                        setSubmissions((prev) => prev.map((s) => (s.submissionId === updated.submissionId ? updated : s)));
+                      } catch {
+                        // ignore
+                      }
+                    }}
+                  />
                 </div>
               </motion.div>
             ) : (

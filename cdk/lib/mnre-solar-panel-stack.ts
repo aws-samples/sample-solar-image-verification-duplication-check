@@ -183,6 +183,82 @@ export class MnreSolarPanelStack extends cdk.Stack {
     });
     submissionsTable.grantReadWriteData(getStatusFn);
 
+    // ─── Cheque-flow Lambdas ───
+    // Bedrock region for Claude Opus 4.7 — defaults to ap-south-1; flip to us-east-1 via context if not GA there.
+    const chequeBedrockRegion = (this.node.tryGetContext('chequeBedrockRegion') as string) || 'ap-south-1';
+    const chequeModelId = (this.node.tryGetContext('chequeModelId') as string) || 'anthropic.claude-opus-4-7';
+
+    const chequeUploadFn = new lambda.Function(this, 'ChequeUploadFunction', {
+      ...lambdaDefaults,
+      timeout: cdk.Duration.seconds(30),
+      code: lambda.Code.fromAsset(path.join(__dirname, '../../lambdas/cheque_upload')),
+      handler: 'handler.lambda_handler',
+      environment: {
+        BUCKET_NAME: imageBucket.bucketName,
+        SUBMISSIONS_TABLE: submissionsTable.tableName,
+      },
+    });
+    imageBucket.grantPut(chequeUploadFn);
+    submissionsTable.grantReadWriteData(chequeUploadFn);
+
+    const chequeConfirmFn = new lambda.Function(this, 'ChequeConfirmFunction', {
+      ...lambdaDefaults,
+      timeout: cdk.Duration.seconds(30),
+      code: lambda.Code.fromAsset(path.join(__dirname, '../../lambdas/cheque_confirm')),
+      handler: 'handler.lambda_handler',
+      environment: {
+        SUBMISSIONS_TABLE: submissionsTable.tableName,
+        CHEQUE_STATE_MACHINE_ARN: '', // set after state machine creation
+      },
+    });
+    imageBucket.grantRead(chequeConfirmFn);
+    submissionsTable.grantReadWriteData(chequeConfirmFn);
+
+    const chequeOcrFn = new lambda.Function(this, 'ChequeOcrFunction', {
+      ...lambdaDefaults,
+      code: lambda.Code.fromAsset(path.join(__dirname, '../../lambdas/cheque_ocr')),
+      handler: 'handler.lambda_handler',
+      environment: {
+        BUCKET_NAME: imageBucket.bucketName,
+        BEDROCK_REGION: chequeBedrockRegion,
+        CHEQUE_MODEL_ID: chequeModelId,
+      },
+    });
+    imageBucket.grantRead(chequeOcrFn);
+    chequeOcrFn.addToRolePolicy(new iam.PolicyStatement({
+      actions: ['bedrock:InvokeModel', 'bedrock:Converse'],
+      resources: [`arn:aws:bedrock:${chequeBedrockRegion}::foundation-model/${chequeModelId}*`],
+    }));
+
+    const ifscVerifyFn = new lambda.Function(this, 'IfscVerifyFunction', {
+      ...lambdaDefaults,
+      timeout: cdk.Duration.seconds(15),
+      code: lambda.Code.fromAsset(path.join(__dirname, '../../lambdas/ifsc_verify')),
+      handler: 'handler.lambda_handler',
+    });
+
+    const chequeDecisionFn = new lambda.Function(this, 'ChequeDecisionFunction', {
+      ...lambdaDefaults,
+      timeout: cdk.Duration.seconds(30),
+      code: lambda.Code.fromAsset(path.join(__dirname, '../../lambdas/cheque_decision')),
+      handler: 'handler.lambda_handler',
+      environment: {
+        SUBMISSIONS_TABLE: submissionsTable.tableName,
+      },
+    });
+    submissionsTable.grantWriteData(chequeDecisionFn);
+
+    const chequeReviewFn = new lambda.Function(this, 'ChequeReviewFunction', {
+      ...lambdaDefaults,
+      timeout: cdk.Duration.seconds(30),
+      code: lambda.Code.fromAsset(path.join(__dirname, '../../lambdas/cheque_review')),
+      handler: 'handler.lambda_handler',
+      environment: {
+        SUBMISSIONS_TABLE: submissionsTable.tableName,
+      },
+    });
+    submissionsTable.grantReadWriteData(chequeReviewFn);
+
     // ─── Step Functions State Machine ───
     const waitForUpload = new sfn.Wait(this, 'WaitForUpload', {
       time: sfn.WaitTime.duration(cdk.Duration.seconds(10)),
@@ -285,6 +361,67 @@ export class MnreSolarPanelStack extends cdk.Stack {
     stateMachine.grantStartExecution(confirmUploadFn);
     confirmUploadFn.addEnvironment('STATE_MACHINE_ARN', stateMachine.stateMachineArn);
 
+    // ─── Cheque Step Functions State Machine ───
+    const chequeStoreError = new tasks.LambdaInvoke(this, 'StoreChequeError', {
+      lambdaFunction: chequeDecisionFn,
+      payload: sfn.TaskInput.fromObject({
+        'submissionId.$': '$.submissionId',
+        'expectedHolderName.$': '$.expectedHolderName',
+        'chequeOcrResult': {
+          'ifsc': '',
+          'accountNumber': '',
+          'holderName': '',
+          'bankName': '',
+          'branch': '',
+          'micr': '',
+          'hasCancelledStamp': false,
+          'hasSignature': false,
+          'ocrConfidence': 0,
+          'ifscFormatValid': false,
+        },
+        'ifscVerifyResult': {
+          'verified': false,
+          'error': 'Cheque pipeline error',
+        },
+      }),
+      outputPath: '$.Payload',
+    });
+
+    const waitForCheque = new sfn.Wait(this, 'WaitForCheque', {
+      time: sfn.WaitTime.duration(cdk.Duration.seconds(5)),
+    });
+
+    const chequeOcrTask = new tasks.LambdaInvoke(this, 'ChequeOcrTask', {
+      lambdaFunction: chequeOcrFn,
+      outputPath: '$.Payload',
+    });
+    chequeOcrTask.addCatch(chequeStoreError, { resultPath: '$.error-info' });
+
+    const ifscVerifyTask = new tasks.LambdaInvoke(this, 'IfscVerifyTask', {
+      lambdaFunction: ifscVerifyFn,
+      outputPath: '$.Payload',
+    });
+    ifscVerifyTask.addCatch(chequeStoreError, { resultPath: '$.error-info' });
+
+    const chequeDecisionTask = new tasks.LambdaInvoke(this, 'ChequeDecisionTask', {
+      lambdaFunction: chequeDecisionFn,
+      outputPath: '$.Payload',
+    });
+    chequeDecisionTask.addCatch(chequeStoreError, { resultPath: '$.error-info' });
+
+    const chequeDefinition = waitForCheque
+      .next(chequeOcrTask)
+      .next(ifscVerifyTask)
+      .next(chequeDecisionTask);
+
+    const chequeStateMachine = new sfn.StateMachine(this, 'ChequeStateMachine', {
+      definitionBody: sfn.DefinitionBody.fromChainable(chequeDefinition),
+      timeout: cdk.Duration.minutes(5),
+    });
+
+    chequeStateMachine.grantStartExecution(chequeConfirmFn);
+    chequeConfirmFn.addEnvironment('CHEQUE_STATE_MACHINE_ARN', chequeStateMachine.stateMachineArn);
+
     // ─── API Gateway ───
     const api = new apigateway.RestApi(this, 'MnreApi', {
       restApiName: 'MNRE Solar Panel API',
@@ -307,6 +444,16 @@ export class MnreSolarPanelStack extends cdk.Stack {
 
     const submissionsResource = api.root.addResource('submissions');
     submissionsResource.addMethod('GET', new apigateway.LambdaIntegration(getStatusFn));
+
+    const chequeUploadResource = api.root.addResource('cheque-upload');
+    chequeUploadResource.addMethod('POST', new apigateway.LambdaIntegration(chequeUploadFn));
+
+    const chequeConfirmResource = api.root.addResource('cheque-confirm');
+    chequeConfirmResource.addMethod('POST', new apigateway.LambdaIntegration(chequeConfirmFn));
+
+    const chequeReviewResource = api.root.addResource('cheque-review');
+    const chequeReviewIdResource = chequeReviewResource.addResource('{submissionId}');
+    chequeReviewIdResource.addMethod('POST', new apigateway.LambdaIntegration(chequeReviewFn));
 
     // ─── Frontend Hosting ───
     const frontendBucket = new s3.Bucket(this, 'FrontendBucket', {
@@ -340,5 +487,6 @@ export class MnreSolarPanelStack extends cdk.Stack {
     new cdk.CfnOutput(this, 'ImageBucketName', { value: imageBucket.bucketName });
     new cdk.CfnOutput(this, 'SubmissionsTableName', { value: submissionsTable.tableName });
     new cdk.CfnOutput(this, 'StateMachineArn', { value: stateMachine.stateMachineArn });
+    new cdk.CfnOutput(this, 'ChequeStateMachineArn', { value: chequeStateMachine.stateMachineArn });
   }
 }
