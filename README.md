@@ -9,6 +9,7 @@ A serverless AWS application for the **Ministry of New and Renewable Energy (MNR
 
 ## Step Functions Machine Orchestration
 <img width="1423" height="1600" alt="image" src="https://github.com/user-attachments/assets/6cca736e-b96c-47ca-a2a0-8881d162e6a7" />
+<img width="576" height="755" alt="cancelled-cheque-SF" src="https://github.com/user-attachments/assets/4d96287a-283d-4b61-8f04-aea3fcf0fd3b" />
 
 ## Cheque Validation & Fund Release Flow
 
