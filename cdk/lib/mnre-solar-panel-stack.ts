@@ -184,9 +184,10 @@ export class MnreSolarPanelStack extends cdk.Stack {
     submissionsTable.grantReadWriteData(getStatusFn);
 
     // ─── Cheque-flow Lambdas ───
-    // Bedrock region for Claude Opus 4.7 — defaults to ap-south-1; flip to us-east-1 via context if not GA there.
+    // Claude Opus 4.7 on Bedrock is only invocable via inference profile.
+    // Defaults: ap-south-1 region using the Global cross-region profile (routes to whichever region has capacity).
     const chequeBedrockRegion = (this.node.tryGetContext('chequeBedrockRegion') as string) || 'ap-south-1';
-    const chequeModelId = (this.node.tryGetContext('chequeModelId') as string) || 'anthropic.claude-opus-4-7';
+    const chequeModelId = (this.node.tryGetContext('chequeModelId') as string) || 'global.anthropic.claude-opus-4-7';
 
     const chequeUploadFn = new lambda.Function(this, 'ChequeUploadFunction', {
       ...lambdaDefaults,
@@ -225,9 +226,15 @@ export class MnreSolarPanelStack extends cdk.Stack {
       },
     });
     imageBucket.grantRead(chequeOcrFn);
+    // Bedrock requires permissions on BOTH the inference profile AND the underlying
+    // foundation models it routes to. Global profiles fan out to multiple regions, so
+    // the foundation-model ARN is left wildcard (cross-region routing).
     chequeOcrFn.addToRolePolicy(new iam.PolicyStatement({
       actions: ['bedrock:InvokeModel', 'bedrock:Converse'],
-      resources: [`arn:aws:bedrock:${chequeBedrockRegion}::foundation-model/${chequeModelId}*`],
+      resources: [
+        `arn:aws:bedrock:${chequeBedrockRegion}:${this.account}:inference-profile/${chequeModelId}`,
+        `arn:aws:bedrock:*::foundation-model/anthropic.claude-opus-4-7*`,
+      ],
     }));
 
     const ifscVerifyFn = new lambda.Function(this, 'IfscVerifyFunction', {
@@ -364,26 +371,6 @@ export class MnreSolarPanelStack extends cdk.Stack {
     // ─── Cheque Step Functions State Machine ───
     const chequeStoreError = new tasks.LambdaInvoke(this, 'StoreChequeError', {
       lambdaFunction: chequeDecisionFn,
-      payload: sfn.TaskInput.fromObject({
-        'submissionId.$': '$.submissionId',
-        'expectedHolderName.$': '$.expectedHolderName',
-        'chequeOcrResult': {
-          'ifsc': '',
-          'accountNumber': '',
-          'holderName': '',
-          'bankName': '',
-          'branch': '',
-          'micr': '',
-          'hasCancelledStamp': false,
-          'hasSignature': false,
-          'ocrConfidence': 0,
-          'ifscFormatValid': false,
-        },
-        'ifscVerifyResult': {
-          'verified': false,
-          'error': 'Cheque pipeline error',
-        },
-      }),
       outputPath: '$.Payload',
     });
 

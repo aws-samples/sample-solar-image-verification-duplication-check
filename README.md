@@ -10,6 +10,12 @@ A serverless AWS application for the **Ministry of New and Renewable Energy (MNR
 ## Step Functions Machine Orchestration
 <img width="1423" height="1600" alt="image" src="https://github.com/user-attachments/assets/6cca736e-b96c-47ca-a2a0-8881d162e6a7" />
 
+## Cheque Validation & Fund Release Flow
+
+Once an image submission is `ACCEPTED`, the applicant uploads a cancelled cheque to release subsidy funds. A second Step Function runs Claude Opus 4.7 (Bedrock) for OCR, verifies the IFSC against Razorpay's public IFSC API, and decides `APPROVED` / `DECLINED` / `NEEDS_REVIEW`.
+
+Editable diagram: [`mnre-cheque-validation-flow.drawio`](mnre-cheque-validation-flow.drawio)
+
 ---
 
 ## Tech Stack
@@ -22,7 +28,8 @@ A serverless AWS application for the **Ministry of New and Renewable Energy (MNR
 | Compute | AWS Lambda (Python 3.12) |
 | Orchestration | AWS Step Functions |
 | Storage | Amazon S3, Amazon DynamoDB |
-| AI/ML | Amazon Rekognition, Amazon Bedrock (Titan Embeddings, Google Gemma 3 12B IT) |
+| AI/ML | Amazon Rekognition, Amazon Bedrock (Titan Embeddings, Google Gemma 3 12B IT, Claude Opus 4.7 — cheque OCR) |
+| External APIs | Razorpay public IFSC API (`ifsc.razorpay.com`) |
 | IaC | AWS CDK (TypeScript) |
 | Region | ap-south-1 (Mumbai) |
 
@@ -39,27 +46,37 @@ mnre-solar-panel-poc/
 │   ├── src/
 │   │   ├── api/client.ts         # API client (axios)
 │   │   ├── components/
-│   │   │   ├── ImageUpload.tsx       # Drag-and-drop upload
-│   │   │   ├── SubmissionsList.tsx   # Submissions list with live updates
-│   │   │   ├── SubmissionDetail.tsx  # Pipeline visualization
-│   │   │   ├── DashboardStats.tsx    # Stats dashboard
-│   │   │   ├── SolarScene.tsx        # Animated solar scene
-│   │   │   ├── StatusBadge.tsx       # Animated status badges
-│   │   │   └── ToastContainer.tsx    # Toast notifications
+│   │   │   ├── ImageUpload.tsx           # Drag-and-drop upload
+│   │   │   ├── SubmissionsList.tsx       # Submissions list with live updates
+│   │   │   ├── SubmissionDetail.tsx      # Pipeline visualization + cheque hand-off
+│   │   │   ├── ChequeUpload.tsx          # Cancelled-cheque upload (post-ACCEPTED)
+│   │   │   ├── ChequeValidationPanel.tsx # OCR/IFSC results + manual review controls
+│   │   │   ├── DashboardStats.tsx        # Stats dashboard
+│   │   │   ├── SolarScene.tsx            # Animated solar scene
+│   │   │   ├── StatusBadge.tsx           # Animated status badges
+│   │   │   └── ToastContainer.tsx        # Toast notifications
 │   │   ├── App.tsx               # Main app with polling
 │   │   ├── App.css               # Solar-themed styles
 │   │   └── types/index.ts        # TypeScript interfaces
 │   └── package.json
 ├── lambdas/                      # Lambda functions
-│   ├── upload/                   # Pre-signed URL generation
-│   ├── confirm_upload/           # S3 verification + Step Function start
+│   ├── upload/                   # Pre-signed URL generation (image)
+│   ├── confirm_upload/           # S3 verification + image Step Function start
 │   ├── quality_check/            # Rekognition-based validation
 │   ├── duplication_check/        # Titan embedding similarity
 │   ├── custom_checks/            # Gemma 3 12B IT vision analysis
 │   ├── index_image/              # Embedding storage for future lookups
-│   ├── store_result/             # Final status persistence
+│   ├── store_result/             # Final image status persistence
 │   ├── get_status/               # Status retrieval + auto-expiry
-│   └── layers/common/            # Shared utilities (Pillow, helpers)
+│   ├── cheque_upload/            # Pre-signed URL generation (cheque)
+│   ├── cheque_confirm/           # Starts ChequeStateMachine
+│   ├── cheque_ocr/               # Claude Opus 4.7 OCR → structured JSON
+│   ├── ifsc_verify/              # GET https://ifsc.razorpay.com/{IFSC}
+│   ├── cheque_decision/          # APPROVED / DECLINED / NEEDS_REVIEW
+│   ├── cheque_review/            # Manual approve/decline endpoint
+│   └── layers/common/            # Shared utilities (Pillow, helpers, name_similarity)
+├── mnre-solar-panel-architecture.drawio       # Image pipeline architecture
+├── mnre-cheque-validation-flow.drawio         # Cheque validation flow
 └── README.md
 ```
 
@@ -439,6 +456,99 @@ The shared `common` layer (`lambdas/layers/common/python/`) includes:
 - **`utils.py`** — Response builder, cosine similarity function, timestamp helper, JPEG conversion utility
 - **`constants.py`** — Shared constants (similarity threshold 0.95, min solar panel confidence 70%, inclination range 20-40°, solar panel label list)
 - **Pillow (PIL)** — Image format conversion (compiled for `manylinux2014_x86_64`)
+
+---
+
+## Cheque Validation Pipeline — Deep Dive
+
+After an image is `ACCEPTED`, the applicant is prompted to upload a cancelled cheque and type the expected account-holder name. A second, independent Step Functions state machine (`ChequeStateMachine`) runs:
+
+```
+Wait 5s ─► cheque_ocr ─► ifsc_verify ─► cheque_decision ─► paymentStatus written to DDB
+                                                              │
+                                                              ├─► APPROVED       (auto)
+                                                              ├─► DECLINED       (hard fail)
+                                                              └─► NEEDS_REVIEW   (manual review UI)
+```
+
+### Step 1: Cheque OCR (Claude Opus 4.7 via Bedrock)
+
+**Lambda:** `lambdas/cheque_ocr/handler.py`
+
+Invokes Claude Opus 4.7 via the Bedrock Converse API using the **`global.anthropic.claude-opus-4-7`** cross-region inference profile (Opus 4.7 is not available via on-demand throughput — inference profiles are required). One structured-JSON prompt extracts:
+
+- `ifsc`, `accountNumber`, `holderName`, `bankName`, `branch`, `micr`
+- `hasCancelledStamp` (boolean — detects handwritten/stamped "CANCELLED" or "CANCELED")
+- `hasSignature` (boolean)
+- `ocrConfidence` (0.0–1.0)
+
+The handler also validates the IFSC against the canonical regex `^[A-Z]{4}0[A-Z0-9]{6}$` and short-circuits if malformed.
+
+**Region:** Defaults to `ap-south-1`; overridable via CDK context (`-c chequeBedrockRegion=us-east-1 -c chequeModelId=us.anthropic.claude-opus-4-7`).
+
+### Step 2: IFSC Verify (Razorpay public API)
+
+**Lambda:** `lambdas/ifsc_verify/handler.py`
+
+Pure-Python `urllib.request` GET to `https://ifsc.razorpay.com/{IFSC}` (no API key required). Maps the response to:
+
+- `verified: true/false`
+- `bank`, `branch`, `address`, `city`, `state`, `micr`
+- `imps`, `neft`, `rtgs`, `upi` (capability flags)
+
+A 404 from Razorpay → `verified: false` with `error: "IFSC not found"`. Network errors are captured similarly.
+
+### Step 3: Cheque Decision
+
+**Lambda:** `lambdas/cheque_decision/handler.py`
+
+Combines the OCR fields, the IFSC API response, and the applicant's typed `expectedHolderName` to compute a final decision. Uses **token-set Jaccard similarity** (`name_similarity` in `lambdas/layers/common/python/utils.py`) — handles word ordering and case naturally, no extra deps.
+
+| Check | Hard fail → DECLINED | Soft fail → NEEDS_REVIEW | Pass |
+|---|---|---|---|
+| Razorpay IFSC API | non-200 / 404 | — | 200 + valid data |
+| `CANCELLED` stamp on cheque | not detected | — | detected by Opus |
+| Account number | empty / <9 digits / non-digits | — | valid digit string |
+| Bank name (cheque vs IFSC API) | — | Jaccard < 0.85 | ≥ 0.85 |
+| Holder name (cheque vs applicant input) | — | Jaccard < 0.70 | ≥ 0.70 |
+| Overall OCR confidence | — | < 0.60 | ≥ 0.60 |
+
+Any hard fail → `DECLINED`. No hard fails but ≥1 soft fail → `NEEDS_REVIEW`. Else → `APPROVED`.
+
+The lambda writes both `paymentStatus` and a full `chequeValidationResult` JSON onto the existing Submissions row — no new table.
+
+### Step 4: Manual Review (NEEDS_REVIEW path)
+
+**Lambda:** `lambdas/cheque_review/handler.py` · **API:** `POST /cheque-review/{submissionId}`
+
+The frontend (`ChequeValidationPanel.tsx`) renders an inline Approve/Decline panel when `paymentStatus === 'NEEDS_REVIEW'`. The reviewer's name and free-form notes are persisted to `paymentReviewedBy` / `paymentReviewNotes`. The endpoint refuses to act unless the row is currently in `NEEDS_REVIEW` (idempotent).
+
+### Holder-name validation: what's caught vs what's not
+
+The Razorpay **public** IFSC API does **not** return account holder names — banks don't expose that publicly. The current implementation:
+
+- ✅ Catches obvious mismatches between the typed applicant name and the name printed on the cheque
+- ✅ Catches wrong cheque uploaded by accident (different person's name printed on it)
+- ✅ Catches non-existent IFSCs and missing CANCELLED stamps
+- ❌ **Does NOT confirm the typed name belongs to that account number at the bank**
+
+**Future work — penny-drop verification.** For true name↔account binding, integrate Razorpay's **Bank Account Verification (Fund Account Validation) API** — it triggers a ₹1 IMPS test transaction and returns the bank's `registered_name`. That would slot in as a new `account_verify` step between `ifsc_verify` and `cheque_decision`. Requires a RazorpayX business account, manual API activation, and `key_id`/`key_secret` stored in AWS Secrets Manager. Not implemented in this POC.
+
+### IAM notes (Opus 4.7 inference profile)
+
+Bedrock requires permissions on **both** the inference profile ARN and the underlying foundation model ARN it routes to. The CDK policy is:
+
+```typescript
+chequeOcrFn.addToRolePolicy(new iam.PolicyStatement({
+  actions: ['bedrock:InvokeModel', 'bedrock:Converse'],
+  resources: [
+    `arn:aws:bedrock:${region}:${account}:inference-profile/${chequeModelId}`,
+    `arn:aws:bedrock:*::foundation-model/anthropic.claude-opus-4-7*`,
+  ],
+}));
+```
+
+The foundation-model ARN is left wildcard because Global inference profiles route across regions.
 
 ---
 

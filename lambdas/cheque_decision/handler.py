@@ -71,9 +71,20 @@ def evaluate(ocr: dict, ifsc: dict, expected_holder: str) -> dict:
 
 def lambda_handler(event, context):
     submission_id = event['submissionId']
-    ocr = event.get('chequeOcrResult', {})
-    ifsc = event.get('ifscVerifyResult', {})
+    ocr = event.get('chequeOcrResult', {}) or {}
+    ifsc = event.get('ifscVerifyResult', {}) or {}
     expected_holder = event.get('expectedHolderName', '')
+
+    error_info = event.get('error-info')
+    if error_info and not ifsc.get('error'):
+        cause = error_info.get('Cause', '')
+        try:
+            cause_payload = json.loads(cause) if isinstance(cause, str) else cause
+            err_msg = cause_payload.get('errorMessage', cause)[:300] if isinstance(cause_payload, dict) else str(cause)[:300]
+        except (json.JSONDecodeError, TypeError):
+            err_msg = str(cause)[:300]
+        ifsc = {'verified': False, 'error': f"Pipeline error ({error_info.get('Error', 'Unknown')}): {err_msg}"}
+        ocr = ocr or {}
 
     decision = evaluate(ocr, ifsc, expected_holder)
 
