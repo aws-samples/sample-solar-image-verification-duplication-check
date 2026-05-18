@@ -75,7 +75,7 @@ def invoke_opus(image_bytes: bytes, media_type: str) -> dict:
                 {'text': OCR_PROMPT},
             ],
         }],
-        inferenceConfig={'maxTokens': 1024, 'temperature': 0.0},
+        inferenceConfig={'maxTokens': 1024},
     )
 
     text = response['output']['message']['content'][0]['text']
