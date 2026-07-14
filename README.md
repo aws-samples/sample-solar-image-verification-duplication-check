@@ -1,11 +1,51 @@
 # MNRE Solar Panel Verification Portal
 
-A serverless AWS application for the **Ministry of New and Renewable Energy (MNRE)** that verifies solar panel installation images submitted for government subsidy claims. This POC runs a two-check AI verification pipeline — solar panel detection via Amazon Rekognition, followed by a duplicate-image check via Amazon Titan image embeddings.
+A serverless AWS application for the **Ministry of New and Renewable Energy (MNRE)** that verifies solar panel installation images submitted for government subsidy claims. This POC runs a focused two-check pipeline: solar panel detection via Amazon Rekognition, followed by a duplicate-image check via Amazon Titan image embeddings.
+
+---
+
+## What It Does
+
+1. User uploads a solar panel installation image through the web portal.
+2. Quality Check (Amazon Rekognition) confirms the image actually shows a solar panel and screens for inappropriate content.
+3. Duplication Check (Amazon Titan embeddings) confirms the image has not been submitted before.
+4. Accepted images are indexed (embedding stored) so future submissions can be checked against them.
+5. Final ACCEPTED / REJECTED status is written to DynamoDB with a full audit trail.
 
 ---
 
 ## Architecture
-<img width="1621" height="1152" alt="mnre-solar-panel-architecture drawio" src="https://github.com/user-attachments/assets/788f0872-5df7-4768-964b-3e8e8731cd11" />
+
+```
+                          ┌──────────────┐
+   User Browser  ◄──────► │  CloudFront  │ ◄──────►  S3 (Frontend static)
+                          └──────┬───────┘
+                                 │
+                          ┌──────▼───────┐
+                          │ API Gateway  │  (REST)
+                          └──────┬───────┘
+        ┌────────────────────────┼────────────────────────┐
+        │                        │                         │
+   POST /upload            POST /confirm         GET /status/{id}
+   POST /confirm                 │               GET /submissions
+        │                        │
+   ┌────▼─────┐          ┌───────▼────────┐
+   │ Upload λ │          │ ConfirmUpload λ │──► Step Functions
+   └──────────┘          └────────────────┘         │
+                                                     ▼
+   ┌───────────────────── Step Functions pipeline (10-min timeout) ─────────────────────┐
+   │                                                                                     │
+   │  Wait 10s ─► Quality Check ─►[pass?]─► Duplication Check ─►[pass?]─► Index ─► Store  │
+   │              (Rekognition)     │        (Titan embed)        │                       │
+   │                                ▼                             ▼                       │
+   │                          Reject+Store                  Reject+Store                  │
+   │                                                                                     │
+   │  [any step error] ─────────────────────────────────────────► StoreErrorResult      │
+   └─────────────────────────────────────────────────────────────────────────────────────┘
+
+   DynamoDB: Submissions (status + results)   |   Embeddings (1024-dim vectors)
+   S3: uploaded images                        |   Bedrock: amazon.titan-embed-image-v1
+```
 
 ---
 
@@ -13,13 +53,14 @@ A serverless AWS application for the **Ministry of New and Renewable Energy (MNR
 
 | Layer | Technology |
 |-------|-----------|
-| Frontend | React 19, TypeScript, Vite 6, Framer Motion |
+| Frontend | React 19, TypeScript, Vite 6, Framer Motion, Axios |
 | CDN | Amazon CloudFront |
 | API | Amazon API Gateway (REST) |
-| Compute | AWS Lambda (Python 3.12) |
+| Compute | AWS Lambda (Python 3.12, 6 handlers) |
 | Orchestration | AWS Step Functions |
-| Storage | Amazon S3, Amazon DynamoDB |
+| Storage | Amazon S3, Amazon DynamoDB (on-demand) |
 | AI/ML | Amazon Rekognition, Amazon Bedrock (Titan Image Embeddings) |
+| Image processing | Pillow (PIL) via Lambda layer |
 | IaC | AWS CDK (TypeScript) |
 | Region | ap-south-1 (Mumbai) |
 
@@ -29,91 +70,51 @@ A serverless AWS application for the **Ministry of New and Renewable Energy (MNR
 
 ```
 mnre-solar-panel-poc/
-├── cdk/                          # AWS CDK infrastructure
-│   ├── bin/app.ts                # CDK app entry point
-│   └── lib/mnre-solar-panel-stack.ts  # Main stack definition
-├── frontend/                     # React SPA
-│   ├── src/
-│   │   ├── api/client.ts         # API client (axios)
-│   │   ├── components/
-│   │   │   ├── ImageUpload.tsx           # Drag-and-drop upload
-│   │   │   ├── SubmissionsList.tsx       # Submissions list with live updates
-│   │   │   ├── SubmissionDetail.tsx      # Pipeline visualization
-│   │   │   ├── DashboardStats.tsx        # Stats dashboard
-│   │   │   ├── SolarScene.tsx            # Animated solar scene
-│   │   │   ├── StatusBadge.tsx           # Animated status badges
-│   │   │   └── ToastContainer.tsx        # Toast notifications
-│   │   ├── App.tsx               # Main app with polling
-│   │   ├── App.css               # Solar-themed styles
-│   │   └── types/index.ts        # TypeScript interfaces
-│   └── package.json
-├── lambdas/                      # Lambda functions
-│   ├── upload/                   # Pre-signed URL generation (image)
-│   ├── confirm_upload/           # S3 verification + image Step Function start
-│   ├── quality_check/            # Rekognition-based validation
-│   ├── duplication_check/        # Titan embedding similarity
-│   ├── index_image/              # Embedding storage for future lookups
-│   ├── store_result/             # Final image status persistence
-│   ├── get_status/               # Status retrieval + auto-expiry
-│   └── layers/common/            # Shared utilities (Pillow, helpers)
-├── deploy.py                     # End-to-end deploy script (wraps CDK)
-├── mnre-solar-panel-architecture.drawio       # Image pipeline architecture
+├── cdk/                               # AWS CDK infrastructure
+│   ├── bin/app.ts                     # CDK app entry point
+│   └── lib/mnre-solar-panel-stack.ts  # Full stack definition
+├── frontend/                          # React SPA (Vite + TypeScript)
+│   └── src/
+│       ├── api/client.ts              # Axios API client
+│       ├── types/index.ts             # TypeScript interfaces
+│       ├── App.tsx                    # Main app with polling
+│       ├── App.css                    # Solar-themed styles
+│       └── components/
+│           ├── ImageUpload.tsx        # Drag-and-drop upload
+│           ├── SubmissionsList.tsx    # Live-updating submissions list
+│           ├── SubmissionDetail.tsx   # 4-step pipeline visualization
+│           ├── DashboardStats.tsx     # Stats dashboard
+│           ├── SolarScene.tsx         # Animated solar scene
+│           ├── StatusBadge.tsx        # Animated status badges
+│           └── ToastContainer.tsx     # Toast notifications
+├── lambdas/                           # Lambda functions (Python 3.12)
+│   ├── upload/                        # Pre-signed URL generation
+│   ├── confirm_upload/                # S3 verification + Step Function start
+│   ├── quality_check/                 # Rekognition solar detection + moderation
+│   ├── duplication_check/             # Titan embedding similarity
+│   ├── index_image/                   # Embedding storage for future lookups
+│   ├── store_result/                  # Final status persistence
+│   ├── get_status/                    # Status retrieval + auto-expiry
+│   └── layers/common/                 # Shared utilities (Pillow, helpers)
+├── deploy.py                          # End-to-end deploy script (wraps CDK)
 └── README.md
 ```
 
 ---
 
-## Verification Pipeline — Deep Dive
+## Verification Pipeline
 
-The Step Functions state machine executes two checks sequentially. If either check fails, the submission is immediately rejected and the result is stored.
-
-```
-Image Upload
-     │
-     ▼
-┌─────────────────────────┐
-│  Step 1: Quality Check  │  ← Is this actually a solar panel?
-│  (Amazon Rekognition)   │
-└───────────┬─────────────┘
-            │ Pass (≥70% confidence)
-            ▼
-┌──────────────────────────┐
-│ Step 2: Duplication Check│  ← Has this exact image been submitted before?
-│ (Titan Image Embeddings) │
-└───────────┬──────────────┘
-            │ Pass (<95% similarity)
-            ▼
-┌──────────────────────────┐
-│  Step 3: Index Image     │  ← Store embedding for future duplicate detection
-│  (DynamoDB)              │
-└───────────┬──────────────┘
-            │
-            ▼
-┌──────────────────────────┐
-│  Step 4: Store Result    │  ← Write ACCEPTED to DynamoDB
-│  (DynamoDB)              │
-└──────────────────────────┘
-```
-
----
+The Step Functions state machine runs two checks sequentially. If either fails, the submission is rejected immediately and the result is stored.
 
 ### Step 1: Quality Check (Amazon Rekognition)
 
-**Lambda:** `lambdas/quality_check/handler.py`
+Lambda: `lambdas/quality_check/handler.py`
 
-**Purpose:** Verify that the uploaded image actually contains a solar panel installation, and flag inappropriate content.
+1. Converts the upload (PNG, WebP, BMP, TIFF, GIF) to JPEG via Pillow, saved back to S3 as `{name}_converted.jpg` and used by all downstream steps.
+2. Calls Rekognition `DetectLabels` and matches solar-panel labels (`Solar Panel`, `Solar Energy`, `Solar Power`, `Electrical Device`, `Power Supply`), checking direct labels and parents. Highest match becomes `solarPanelConfidence`.
+3. Passes if `solarPanelConfidence >= 70%`, else rejects with `"Solar panel not detected (confidence: X%)"`.
+4. Calls Rekognition `DetectModerationLabels`; any moderation hit rejects the submission.
 
-**How it works:**
-
-1. **Image conversion** — The uploaded image (which may be PNG, WebP, BMP, TIFF, or GIF) is converted to JPEG using Pillow. This normalized JPEG is saved back to S3 as `{original_name}_converted.jpg` and used by all downstream steps.
-
-2. **Label detection** — Calls Rekognition `DetectLabels` and searches for solar-panel-related labels including: `Solar Panel`, `Solar Energy`, `Solar Power`, `Electrical Device`, `Power Supply`. It checks both direct label names and their parent categories. The highest confidence score across all matching labels becomes the `solarPanelConfidence`.
-
-3. **Confidence threshold** — The image passes if `solarPanelConfidence >= 70%`. Below this, the image is rejected with the message: *"Solar panel not detected (confidence: X%)"*.
-
-4. **Content moderation** — Calls Rekognition `DetectModerationLabels`. If any moderation labels are found, the submission is rejected regardless of solar panel confidence.
-
-**Output example:**
 ```json
 {
   "passed": true,
@@ -123,88 +124,136 @@ Image Upload
 }
 ```
 
----
-
 ### Step 2: Duplication Check (Titan Image Embeddings)
 
-**Lambda:** `lambdas/duplication_check/handler.py`
+Lambda: `lambdas/duplication_check/handler.py`
 
-**Purpose:** Detect if the same (or near-identical) image has been submitted before, preventing the same installation photo from being used for multiple subsidy claims.
+An image embedding represents a photo's visual content as 1,024 floating-point numbers. Visually similar images produce vectors pointing in nearly the same direction, so near-duplicates score high on cosine similarity.
 
-**How vector embeddings work:**
+1. Reads the converted image, base64-encodes it, and sends it to `amazon.titan-embed-image-v1` for a 1,024-dim vector.
+2. Scans all stored embeddings from the Embeddings table (paginated).
+3. Computes cosine similarity `(A · B) / (|A| × |B|)` against each.
+4. Rejects as duplicate if max similarity `> 0.95`.
+5. Passes the computed embedding forward so Index can store it without recomputing.
 
-An image embedding is a mathematical representation of a photo's visual content as a list of 1,024 floating-point numbers (a vector). Amazon Titan Embed Image v1 takes an image and outputs this fixed-length vector. Visually similar images produce vectors that point in nearly the same direction in 1,024-dimensional space.
-
-```
-Photo of rooftop solar panels    →  [0.0234, -0.1567, 0.0891, 0.2341, ...]  (1024 numbers)
-Same photo slightly cropped      →  [0.0229, -0.1571, 0.0887, 0.2338, ...]  (very similar!)
-Photo of a cat                   →  [0.8912, 0.0034, -0.4521, 0.1102, ...]  (totally different)
-```
-
-**How the duplication check works:**
-
-1. **Generate embedding** — The uploaded image is read from S3, base64-encoded, and sent to `amazon.titan-embed-image-v1` via Bedrock. The model returns a 1,024-dimensional vector.
-
-2. **Scan existing embeddings** — All previously stored embeddings are loaded from the Embeddings DynamoDB table using a full table scan (with pagination).
-
-3. **Cosine similarity comparison** — The new embedding is compared against every stored embedding:
-
-   ```
-   cosine_similarity(A, B) = (A · B) / (|A| × |B|)
-   ```
-
-4. **Threshold check** — If the maximum similarity exceeds **0.95 (95%)**, the image is flagged as a duplicate.
-
-5. **Pass embedding forward** — The computed embedding is included in the output so that Step 3 (Index Image) can store it without re-computing.
-
-**Output example:**
 ```json
 {
   "passed": true,
   "maxSimilarity": 0.498,
   "matchedImageId": null,
-  "embedding": [0.0234, -0.1567, ...]
+  "embedding": [0.0234, -0.1567, "..."]
 }
 ```
 
-**Scaling note:** The current implementation performs a full DynamoDB scan and in-memory comparison for every check. This works for POC-scale (hundreds of images) but would need a vector database (e.g., Aurora PostgreSQL with pgvector, or OpenSearch) for production-scale workloads.
-
----
+Scaling note: the duplication check does a full DynamoDB scan and in-memory comparison per request. Fine for POC scale; production should use a vector store (Aurora pgvector or OpenSearch).
 
 ### Step 3: Index Image
 
-**Lambda:** `lambdas/index_image/handler.py`
-
-**Purpose:** Store the image's vector embedding in DynamoDB so future submissions can be checked for duplicates against it.
-
-Retrieves the embedding from the duplication check result, generates a UUID `imageId`, converts each float to `Decimal`, and stores the record linking `imageId`, `submissionId`, `s3Key`, the embedding, and a timestamp. This step only executes for **accepted** submissions.
-
----
+Lambda: `lambdas/index_image/handler.py` — stores the embedding (converted to `Decimal`) under a new `imageId`, linking `submissionId`, `s3Key`, and a timestamp. Only runs for accepted submissions.
 
 ### Step 4: Store Result
 
-**Lambda:** `lambdas/store_result/handler.py`
+Lambda: `lambdas/store_result/handler.py` — writes final ACCEPTED / REJECTED plus check results and completion timestamp. Also the target of every step's error `Catch` block.
 
-**Purpose:** Write the final ACCEPTED or REJECTED status to the Submissions DynamoDB table, along with all check results and a completion timestamp. Also invoked by the error-handling paths — if any pipeline step throws, the Step Functions Catch block routes here to record the failure.
+### Error handling & auto-expiry
 
----
-
-### Error Handling & Auto-Expiry
-
-- **Step-level error handling:** Every pipeline step has a `Catch` block that routes unhandled exceptions to a `StoreErrorResult` task marking the submission REJECTED with error details.
-- **Rejection branching:** After each check, a `Choice` state short-circuits to a reject path if the check failed, skipping subsequent checks.
-- **Auto-expiry:** The Get Status Lambda marks submissions stuck in PENDING/PROCESSING for more than 5 minutes as REJECTED with a timeout reason.
+- Each step has a `Catch` block routing exceptions to `StoreErrorResult` (marks REJECTED with error detail).
+- A `Choice` after each check short-circuits to a reject path on failure.
+- Get Status marks submissions stuck in PENDING/PROCESSING beyond 5 minutes as REJECTED.
 
 ---
 
-## Frontend Features
+## API
 
-- **Drag-and-drop upload** with file preview (supports JPG, PNG, WebP, BMP, TIFF, GIF up to 15MB)
-- **Real-time status polling** — 3s for active submission, 6s for submission list
-- **Animated pipeline visualization** — shows progress through each verification step with pass/fail indicators
-- **Toast notifications** — alerts when submissions are accepted or rejected
-- **Dashboard stats** — total, accepted, rejected, and processing counts
-- **Solar-themed animations** — sun, solar panels, energy particles (Framer Motion)
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| POST | `/upload` | Request a pre-signed S3 upload URL |
+| POST | `/confirm` | Confirm upload, start the verification pipeline |
+| GET | `/status/{submissionId}` | Single submission status + results |
+| GET | `/submissions?userId=xxx` | All submissions for a user |
+
+### Upload flow
+
+```
+1. POST /upload   { userId, fileName, contentType }  → { submissionId, uploadUrl }
+2. PUT  uploadUrl  (binary image, direct to S3 via pre-signed URL)
+3. POST /confirm  { submissionId }                   → verifies S3 object, starts Step Functions
+```
+
+### Payload format
+
+`POST /upload` request:
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `userId` | string | no (defaults `anonymous`) | User identifier |
+| `fileName` | string | no (defaults `image.jpg`) | Original file name |
+| `contentType` | string | no (defaults `image/jpeg`) | MIME type of the image |
+
+`POST /upload` response:
+
+```json
+{ "submissionId": "uuid", "uploadUrl": "https://<bucket>.s3.amazonaws.com/..." }
+```
+
+---
+
+## Data Models
+
+### Submissions table
+
+| Attribute | Type | Description |
+|-----------|------|-------------|
+| `submissionId` (PK) | String | UUID |
+| `userId` | String | User identifier |
+| `status` | String | PENDING / PROCESSING / ACCEPTED / REJECTED |
+| `s3Key` | String | S3 object key (updated to converted JPEG) |
+| `s3Bucket` | String | Bucket name |
+| `uploadedAt` | String | ISO 8601 timestamp |
+| `completedAt` | String | ISO 8601 timestamp (optional) |
+| `rejectionReason` | String | Reason for rejection (optional) |
+| `qualityCheckResult` | String (JSON) | Rekognition results |
+| `duplicationCheckResult` | String (JSON) | Similarity scores + matched image ID |
+
+GSI: `userId-index` (PK `userId`, SK `uploadedAt`)
+
+### Embeddings table
+
+| Attribute | Type | Description |
+|-----------|------|-------------|
+| `imageId` (PK) | String | UUID |
+| `submissionId` | String | Linked submission |
+| `s3Key` | String | S3 object key |
+| `embedding` | List[Decimal] | 1,024-dim Titan vector |
+| `createdAt` | String | ISO 8601 timestamp |
+
+---
+
+## Key Thresholds
+
+| Parameter | Value |
+|-----------|-------|
+| Solar panel detection confidence | 70% |
+| Duplicate similarity threshold | 95% |
+| Stale submission auto-expiry | 5 minutes |
+| Pre-signed URL validity | 5 minutes |
+| Active submission polling | 3 seconds |
+| Submission list polling | 6 seconds |
+| Step Functions timeout | 10 minutes |
+
+---
+
+## Lambda Configuration
+
+| Function | Memory | Timeout | Purpose |
+|----------|--------|---------|---------|
+| upload | 512 MB | 30s | Pre-signed URL generation |
+| confirm_upload | 512 MB | 30s | S3 verification + Step Function start |
+| quality_check | 512 MB | 120s | Rekognition detection + moderation |
+| duplication_check | 1024 MB | 120s | Vector similarity computation |
+| index_image | 512 MB | 30s | Embedding storage |
+| store_result | 512 MB | 30s | Final result persistence |
+| get_status | 512 MB | 30s | Status retrieval + auto-expiry |
 
 ---
 
@@ -212,10 +261,9 @@ Retrieves the embedding from the duplication check result, generates a UUID `ima
 
 - Node.js 18+
 - Python 3.12
-- AWS CLI configured with `ap-south-1` region
+- AWS CLI configured for `ap-south-1`
 - AWS CDK CLI (`npm install -g aws-cdk`)
-- Bedrock model access enabled in your AWS account for:
-  - `amazon.titan-embed-image-v1` (image embeddings for duplication check)
+- Bedrock model access for `amazon.titan-embed-image-v1`
 
 ---
 
@@ -227,7 +275,7 @@ Retrieves the embedding from the duplication check result, generates a UUID `ima
 python3 deploy.py
 ```
 
-This installs dependencies, bootstraps CDK, builds the frontend, deploys the stack, wires the API URL into `frontend/.env`, then rebuilds and redeploys so CloudFront serves the API-connected build.
+Installs dependencies, bootstraps CDK, builds the frontend, deploys the stack, writes `frontend/.env` with the API URL, then rebuilds and redeploys so CloudFront serves the API-connected build.
 
 Options:
 
@@ -239,11 +287,11 @@ python3 deploy.py --destroy        # tear everything down
 ### Manual deploy (CDK directly)
 
 ```bash
-# 1. Install dependencies
+# 1. Install
 cd frontend && npm install && cd ..
 cd cdk && npm install && cd ..
 
-# 2. Bootstrap CDK (one-time per account/region)
+# 2. Bootstrap (one-time per account/region)
 cd cdk && npx cdk bootstrap aws://ACCOUNT_ID/ap-south-1
 
 # 3. Build frontend + deploy
@@ -252,14 +300,12 @@ cd ../cdk && npx cdk deploy
 
 # 4. Wire API URL and redeploy
 cd ../frontend
-echo "VITE_API_URL=https://xxxxxxxxxx.execute-api.ap-south-1.amazonaws.com/prod/" > .env
+echo "VITE_API_URL=https://xxxxxxxxxx.execute-api.ap-south-1.amazonaws.com/prod" > .env
 npm run build
 cd ../cdk && npx cdk deploy
 ```
 
----
-
-## CDK Outputs
+### CDK outputs
 
 | Output | Description |
 |--------|-------------|
@@ -271,66 +317,25 @@ cd ../cdk && npx cdk deploy
 
 ---
 
-## API Endpoints
-
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| `POST` | `/upload` | Request a pre-signed S3 upload URL |
-| `POST` | `/confirm` | Confirm upload and start verification pipeline |
-| `GET` | `/status/{submissionId}` | Get single submission status |
-| `GET` | `/submissions?userId=xxx` | Get all submissions for a user |
-
-### Upload Flow
-
-```
-1. POST /upload { userId, fileName, contentType }
-   → Returns { submissionId, uploadUrl }
-
-2. PUT uploadUrl (binary file upload directly to S3 using pre-signed URL)
-
-3. POST /confirm { submissionId }
-   → Verifies file exists in S3, starts Step Functions state machine
-```
-
----
-
-## DynamoDB Schema
-
-### Submissions Table
-
-| Attribute | Type | Description |
-|-----------|------|-------------|
-| `submissionId` (PK) | String | UUID |
-| `userId` | String | User identifier |
-| `status` | String | PENDING / PROCESSING / ACCEPTED / REJECTED |
-| `s3Key` | String | S3 object key |
-| `uploadedAt` | String | ISO timestamp |
-| `completedAt` | String | ISO timestamp (when pipeline completes) |
-| `rejectionReason` | String | Why the submission was rejected |
-| `qualityCheckResult` | String (JSON) | Rekognition label detection results |
-| `duplicationCheckResult` | String (JSON) | Similarity scores and matched image ID |
-
-**GSI:** `userId-index` (partition: `userId`, sort: `uploadedAt`)
-
-### Embeddings Table
-
-| Attribute | Type | Description |
-|-----------|------|-------------|
-| `imageId` (PK) | String | UUID |
-| `submissionId` | String | Linked submission |
-| `s3Key` | String | S3 object key |
-| `embedding` | List[Decimal] | 1,024-dimensional Titan image embedding vector |
-| `createdAt` | String | ISO timestamp |
-
----
-
 ## Lambda Layer
 
-The shared `common` layer (`lambdas/layers/common/python/`) includes:
+Shared `common` layer (`lambdas/layers/common/python/`):
 
-- **`utils.py`** — Response builder, cosine similarity function, timestamp helper, JPEG conversion utility
-- **`constants.py`** — Shared constants (similarity threshold 0.95, min solar panel confidence 70%, solar panel label list, status values)
-- **Pillow (PIL)** — Image format conversion (compiled for `manylinux2014_x86_64`)
+- `utils.py` — response builder, cosine similarity, timestamp helper, JPEG conversion
+- `constants.py` — similarity threshold (0.95), min solar confidence (70%), solar label list, status values
+- Pillow (PIL) — image format conversion, compiled for `manylinux2014_x86_64`
+
+---
+
+## Security Posture (POC)
+
+- S3 buckets block all public access; uploads use pre-signed URLs
+- Least-privilege IAM per Lambda
+- DynamoDB reachable only via Lambda
+- CORS open on API Gateway (all origins)
+- No authentication — `userId` is a loose identifier (defaults to `demo-user` in the UI)
+
+Production hardening: Cognito auth, JWT validation, API keys, restricted CORS, rate limiting, WAF, CloudWatch alarms, X-Ray tracing.
 
 ---
 
@@ -341,4 +346,4 @@ python3 deploy.py --destroy
 # or: cd cdk && npx cdk destroy
 ```
 
-This removes all AWS resources including S3 buckets (with `RemovalPolicy.DESTROY` and `autoDeleteObjects`).
+Removes all resources including S3 buckets (`RemovalPolicy.DESTROY` + `autoDeleteObjects`).
