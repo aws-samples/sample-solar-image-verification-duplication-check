@@ -269,36 +269,76 @@ GSI: `userId-index` (PK `userId`, SK `uploadedAt`)
 
 ## Deployment
 
-### One-command deploy (recommended)
+Both deployment paths use the same AWS CDK stack under the hood — the difference is only how the source code reaches the machine that runs the deploy. Pick the use case that matches how the code is delivered.
+
+### Use Case 1 — Source code delivered as a zip in the customer's S3 bucket
+
+Use this when the project is packaged as a zip and dropped into an S3 bucket in the customer's AWS account (for example, handed off for the customer's own team or a CI runner to deploy). The deploy runs from inside the customer account against their credentials.
+
+Prerequisites on the machine running the deploy (customer CloudShell, EC2, or a CI runner with an execution role):
+- Node.js 18+, Python 3.12, AWS CLI, AWS CDK CLI (`npm install -g aws-cdk`)
+- AWS credentials for the target account with permissions to deploy the stack (CloudFormation, Lambda, S3, DynamoDB, Step Functions, API Gateway, CloudFront, IAM)
+- Bedrock model access enabled for `amazon.titan-embed-image-v1`
 
 ```bash
+# 1. Download the source zip from the customer S3 bucket
+aws s3 cp s3://<customer-bucket>/<path>/solar-rooftop-portal.zip . --region ap-south-1
+
+# 2. Unzip and enter the project
+unzip solar-rooftop-portal.zip -d solar-rooftop-portal
+cd solar-rooftop-portal
+
+# 3. Run the end-to-end deploy (installs deps, bootstraps, builds, deploys twice)
 python3 deploy.py
 ```
 
-Installs dependencies, bootstraps CDK, builds the frontend, deploys the stack, writes `frontend/.env` with the API URL, then rebuilds and redeploys so CloudFront serves the API-connected build.
+`deploy.py` handles everything after unzip: `npm install` in `cdk/` and `frontend/`, `cdk bootstrap` (idempotent), the first `cdk deploy` to read the `ApiUrl`, writing `frontend/.env`, then a rebuild and second `cdk deploy` so CloudFront serves the API-connected frontend.
 
-Options:
+To package the repo into the zip that gets uploaded to S3 (exclude local build/dependency artifacts):
 
 ```bash
+zip -r solar-rooftop-portal.zip . \
+  -x '*/node_modules/*' '*/cdk.out/*' '*/dist/*' '*.git/*' 'cdk/outputs.json'
+aws s3 cp solar-rooftop-portal.zip s3://<customer-bucket>/<path>/ --region ap-south-1
+```
+
+Tear down when finished:
+
+```bash
+python3 deploy.py --destroy
+```
+
+### Use Case 2 — Deploy directly with AWS CDK
+
+Use this when you have the source checked out locally (e.g. cloned from Git) and want to deploy straight from your workstation.
+
+Prerequisites:
+- Node.js 18+, Python 3.12, AWS CLI configured for `ap-south-1`, AWS CDK CLI (`npm install -g aws-cdk`)
+- Bedrock model access enabled for `amazon.titan-embed-image-v1`
+
+Fastest path (same wrapper script):
+
+```bash
+python3 deploy.py                  # full deploy
 python3 deploy.py --skip-install   # deps already installed
 python3 deploy.py --destroy        # tear everything down
 ```
 
-### Manual deploy (CDK directly)
+Manual CDK steps (equivalent to what `deploy.py` runs, useful for debugging a single stage):
 
 ```bash
-# 1. Install
+# 1. Install dependencies
 cd frontend && npm install && cd ..
 cd cdk && npm install && cd ..
 
-# 2. Bootstrap (one-time per account/region)
+# 2. Bootstrap the account/region (one-time per account/region)
 cd cdk && npx cdk bootstrap aws://ACCOUNT_ID/ap-south-1
 
-# 3. Build frontend + deploy
+# 3. Build the frontend, then deploy the stack
 cd ../frontend && npm run build
 cd ../cdk && npx cdk deploy
 
-# 4. Wire API URL and redeploy
+# 4. Wire the deployed API URL into the frontend and redeploy
 cd ../frontend
 echo "VITE_API_URL=https://xxxxxxxxxx.execute-api.ap-south-1.amazonaws.com/prod" > .env
 npm run build
@@ -306,6 +346,8 @@ cd ../cdk && npx cdk deploy
 ```
 
 ### CDK outputs
+
+Both use cases print these outputs on completion:
 
 | Output | Description |
 |--------|-------------|
