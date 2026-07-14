@@ -97,6 +97,7 @@ mnre-solar-panel-poc/
 │   ├── get_status/                    # Status retrieval + auto-expiry
 │   └── layers/common/                 # Shared utilities (Pillow, helpers)
 ├── deploy.py                          # End-to-end deploy script (wraps CDK)
+├── cleanup.py                         # Teardown script (destroys all stack resources)
 └── README.md
 ```
 
@@ -383,9 +384,19 @@ Production hardening: Cognito auth, JWT validation, API keys, restricted CORS, r
 
 ## Cleanup
 
+Run `cleanup.py` to destroy every resource the stack created. It asks for confirmation before deleting, then removes local deploy artifacts (`frontend/.env`, `cdk/outputs.json`).
+
+```bash
+python3 cleanup.py                 # destroy the stack (asks for confirmation)
+python3 cleanup.py --yes           # destroy without the interactive prompt
+python3 cleanup.py --keep-local    # keep local .env / outputs.json
+```
+
+Equivalent lower-level commands:
+
 ```bash
 python3 deploy.py --destroy
 # or: cd cdk && npx cdk destroy
 ```
 
-Removes all resources including S3 buckets (`RemovalPolicy.DESTROY` + `autoDeleteObjects`).
+This removes all resources including the DynamoDB tables and S3 buckets (`RemovalPolicy.DESTROY` + `autoDeleteObjects`), so all uploaded images and submission data are deleted.
