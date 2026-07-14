@@ -2,7 +2,7 @@
 
 ## Overview
 
-A serverless AWS application built as a Proof-of-Concept for the **Ministry of New and Renewable Energy (MNRE)**, India. It verifies solar panel installation images submitted for government subsidy eligibility through a multi-step AI-powered verification pipeline, targeting fraud detection, duplicate submission prevention, and MNRE compliance enforcement.
+A serverless AWS application built as a Proof-of-Concept for the **Ministry of New and Renewable Energy (MNRE)**, India. It verifies solar panel installation images submitted for government subsidy eligibility. This POC scope runs a two-check verification pipeline: solar panel detection (Rekognition) and duplicate-image detection (Titan embeddings).
 
 **Deployment Region**: `ap-south-1` (Mumbai, India)
 
@@ -13,13 +13,13 @@ A serverless AWS application built as a Proof-of-Concept for the **Ministry of N
 | Layer              | Technology                                                    |
 |--------------------|---------------------------------------------------------------|
 | **Frontend**       | React 19, TypeScript, Vite 6, Framer Motion 12, Axios, React Dropzone |
-| **Backend**        | Python 3.12 on AWS Lambda (8 handlers)                       |
+| **Backend**        | Python 3.12 on AWS Lambda (6 handlers)                        |
 | **Orchestration**  | AWS Step Functions (state machine)                            |
 | **Database**       | Amazon DynamoDB (2 tables, on-demand billing)                 |
 | **Storage**        | Amazon S3 (images + frontend static assets)                   |
 | **CDN**            | Amazon CloudFront                                             |
 | **API**            | Amazon API Gateway (REST)                                     |
-| **AI/ML**          | Amazon Rekognition, Amazon Titan Embeddings, Claude Opus 4.7 (via AWS Bedrock) |
+| **AI/ML**          | Amazon Rekognition, Amazon Titan Image Embeddings (via AWS Bedrock) |
 | **IaC**            | AWS CDK 2.170 (TypeScript)                                    |
 | **Image Processing**| Pillow (PIL) via Lambda Layer                                |
 
@@ -43,18 +43,16 @@ Step Functions Pipeline (10-min timeout):
     2. Quality Check (Rekognition)
     3. [Decision] If PASS --> Duplication Check, else --> Reject
     4. Duplication Check (Titan Embeddings)
-    5. [Decision] If PASS --> Custom Checks, else --> Reject
-    6. Custom Checks (Claude Opus Vision)
-    7. [Decision] If PASS --> Index Image, else --> Reject
-    8. Index Image (Store Embedding in DynamoDB)
-    9. Accept & Store Result
+    5. [Decision] If PASS --> Index Image, else --> Reject
+    6. Index Image (Store Embedding in DynamoDB)
+    7. Accept & Store Result
 
     [Error at any step] --> Store Error Result (REJECTED)
 ```
 
 ---
 
-## Verification Pipeline (5 Steps)
+## Verification Pipeline (2 Checks + Index + Store)
 
 ### Step 1: Quality Check — Amazon Rekognition
 - Converts uploaded image to JPEG via Pillow (supports PNG, WebP, BMP, TIFF, GIF)
@@ -69,19 +67,12 @@ Step Functions Pipeline (10-min timeout):
 - Threshold: **< 95% similarity** to pass
 - **Fail**: Rejects as duplicate
 
-### Step 3: Custom Checks — Claude Opus 4.7 Vision
-- Sends image to Claude via Bedrock inference profile
-- Analyzes:
-  - **Inclination Angle**: Must be 20–40 degrees (MNRE guidelines)
-  - **Image Authenticity**: Detects AI-generated, morphed, or digitally manipulated images (checks lighting inconsistencies, warping, clone stamping, compression anomalies)
-- Falls back to **Claude Sonnet** if Opus is unavailable
-- **Fail**: Rejects if inclination out of range or manipulation detected
-
-### Step 4: Image Indexing
+### Step 3: Image Indexing
 - Stores the embedding vector in DynamoDB Embeddings table
 - Associates with submission ID and S3 key for future duplicate detection
+- Only runs for accepted submissions
 
-### Step 5: Store Result
+### Step 4: Store Result
 - Updates submission record with final status (ACCEPTED / REJECTED)
 - Preserves all check results as JSON for complete audit trail
 - Records completion timestamp and rejection reason (if applicable)
@@ -116,7 +107,6 @@ Step Functions Pipeline (10-min timeout):
 | `rejectionReason`        | String | Reason for rejection (optional)          |
 | `qualityCheckResult`     | String | JSON — Rekognition results               |
 | `duplicationCheckResult` | String | JSON — Similarity check results          |
-| `customCheckResult`      | String | JSON — Claude vision analysis results    |
 
 **GSI**: `userId-index` (PK: `userId`, SK: `uploadedAt`)
 
@@ -137,7 +127,7 @@ Step Functions Pipeline (10-min timeout):
 | Component            | Description                                                          |
 |----------------------|----------------------------------------------------------------------|
 | **ImageUpload**      | Drag-and-drop uploader (JPG, PNG, WebP, BMP, TIFF, GIF; max 15 MB) |
-| **SubmissionDetail** | 5-step pipeline visualization with animated progress indicators      |
+| **SubmissionDetail** | 4-step pipeline visualization with animated progress indicators      |
 | **SubmissionsList**  | Scrollable list of all user submissions with status badges           |
 | **DashboardStats**   | 4-card summary (Total, In Progress, Accepted, Rejected)             |
 | **SolarScene**       | Animated decorative scene (sun, solar rays, panels, energy particles)|
@@ -154,7 +144,6 @@ Step Functions Pipeline (10-min timeout):
 |----------------------------------|-------------|
 | Solar Panel Detection Confidence | 70%         |
 | Duplicate Similarity Threshold   | 95%         |
-| Panel Inclination Range          | 20–40 degrees |
 | Stale Submission Auto-Expiry     | 5 minutes   |
 | Pre-signed URL Validity          | 5 minutes   |
 | Active Submission Polling        | 3 seconds   |
@@ -171,8 +160,7 @@ Step Functions Pipeline (10-min timeout):
 | confirm_upload     | 512 MB  | 30s     | S3 verification + Step Function start |
 | quality_check      | 512 MB  | 120s    | Rekognition image analysis        |
 | duplication_check  | 1024 MB | 120s    | Vector similarity computation     |
-| custom_checks      | 512 MB  | 120s    | Claude vision analysis            |
-| index_image        | 512 MB  | 120s    | Embedding storage                 |
+| index_image        | 512 MB  | 30s     | Embedding storage                 |
 | store_result       | 512 MB  | 30s     | Final result persistence          |
 | get_status         | 512 MB  | 30s     | Status retrieval                  |
 
@@ -189,12 +177,11 @@ mnre-solar-panel-poc/
 │       └── components/              # UI components (7 total)
 ├── cdk/                             # AWS CDK Infrastructure
 │   └── lib/mnre-solar-panel-stack.ts  # Full stack definition
-├── lambdas/                         # 8 Lambda functions (Python 3.12)
+├── lambdas/                         # 6 Lambda functions (Python 3.12)
 │   ├── upload/
 │   ├── confirm_upload/
 │   ├── quality_check/
 │   ├── duplication_check/
-│   ├── custom_checks/
 │   ├── index_image/
 │   ├── store_result/
 │   ├── get_status/
@@ -202,6 +189,7 @@ mnre-solar-panel-poc/
 │       └── python/
 │           ├── utils.py             # Response builder, cosine similarity, JPEG conversion
 │           └── constants.py         # Thresholds, status values, labels
+├── deploy.py                        # End-to-end deploy script (wraps CDK)
 └── README.md
 ```
 
@@ -215,7 +203,6 @@ mnre-solar-panel-poc/
 | **Direct S3 upload (pre-signed URLs)**  | Reduces Lambda bandwidth costs, improves reliability        |
 | **Sequential pipeline with early exit** | Clear audit trail, stops expensive operations early         |
 | **Vector embeddings for deduplication** | Detects near-duplicates (not just exact hash matches)       |
-| **Claude Opus with Sonnet fallback**    | Prioritizes accuracy; graceful degradation if unavailable   |
 | **5-minute auto-expiry**                | Handles crashed/timed-out pipelines gracefully              |
 | **ap-south-1 (Mumbai) deployment**      | Low latency for India users, data residency compliance      |
 | **DynamoDB on-demand billing**          | No capacity provisioning, scales automatically              |
@@ -238,20 +225,14 @@ mnre-solar-panel-poc/
 ## Deployment
 
 ```bash
-# First-time setup
-cd frontend && npm install && cd ../cdk && npm install
-npx cdk bootstrap aws://ACCOUNT_ID/ap-south-1
-cd ../frontend && npm run build
-cd ../cdk && npx cdk deploy
+# One-command end-to-end deploy
+python3 deploy.py
 
-# Configure frontend (.env)
-VITE_API_URL=<ApiUrl from CDK outputs>
+# Skip npm install if deps already present
+python3 deploy.py --skip-install
 
-# Rebuild & redeploy
-cd ../frontend && npm run build && cd ../cdk && npx cdk deploy
-
-# Destroy
-cd cdk && npx cdk destroy
+# Tear down
+python3 deploy.py --destroy
 ```
 
 **CDK Outputs**: `ApiUrl`, `CloudFrontUrl`, `ImageBucketName`, `SubmissionsTableName`, `StateMachineArn`
@@ -263,9 +244,9 @@ cd cdk && npx cdk destroy
 | Aspect                  | Details                                                      |
 |-------------------------|--------------------------------------------------------------|
 | **Purpose**             | Verify solar panel images for MNRE subsidy eligibility       |
-| **Verification Steps**  | 5 (Quality -> Duplication -> Custom -> Index -> Store)       |
-| **AI Services**         | Rekognition + Titan Embeddings + Claude Opus 4.7             |
-| **Time to Verification**| ~30–120 seconds                                              |
+| **Verification Steps**  | Quality -> Duplication -> Index -> Store                     |
+| **AI Services**         | Rekognition + Titan Image Embeddings                         |
+| **Time to Verification**| ~20–60 seconds                                               |
 | **Scalability**         | Auto-scales to zero (no running costs when idle)             |
 | **Auto-Expiry**         | 5 minutes for stale submissions                              |
-| **Infrastructure**      | Fully serverless, single-command deploy/destroy via CDK      |
+| **Infrastructure**      | Fully serverless, single-command deploy/destroy             |

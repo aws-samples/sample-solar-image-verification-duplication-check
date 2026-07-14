@@ -1,21 +1,11 @@
 # MNRE Solar Panel Verification Portal
 
-A serverless AWS application for the **Ministry of New and Renewable Energy (MNRE)** that verifies solar panel installation images submitted for government subsidy claims. The system uses a multi-step AI-powered verification pipeline to detect fraudulent, duplicate, or non-compliant submissions.
+A serverless AWS application for the **Ministry of New and Renewable Energy (MNRE)** that verifies solar panel installation images submitted for government subsidy claims. This POC runs a two-check AI verification pipeline — solar panel detection via Amazon Rekognition, followed by a duplicate-image check via Amazon Titan image embeddings.
 
 ---
 
 ## Architecture
 <img width="1621" height="1152" alt="mnre-solar-panel-architecture drawio" src="https://github.com/user-attachments/assets/788f0872-5df7-4768-964b-3e8e8731cd11" />
-
-## Step Functions Machine Orchestration
-<img width="1423" height="1600" alt="image" src="https://github.com/user-attachments/assets/6cca736e-b96c-47ca-a2a0-8881d162e6a7" />
-<img width="576" height="755" alt="cancelled-cheque-SF" src="https://github.com/user-attachments/assets/4d96287a-283d-4b61-8f04-aea3fcf0fd3b" />
-
-## Cheque Validation & Fund Release Flow
-
-Once an image submission is `ACCEPTED`, the applicant uploads a cancelled cheque to release subsidy funds. A second Step Function runs Claude Opus 4.7 (Bedrock) for OCR, verifies the IFSC against Razorpay's public IFSC API, and decides `APPROVED` / `DECLINED` / `NEEDS_REVIEW`.
-
-Editable diagram: [`mnre-cheque-validation-flow.drawio`](mnre-cheque-validation-flow.drawio)
 
 ---
 
@@ -29,8 +19,7 @@ Editable diagram: [`mnre-cheque-validation-flow.drawio`](mnre-cheque-validation-
 | Compute | AWS Lambda (Python 3.12) |
 | Orchestration | AWS Step Functions |
 | Storage | Amazon S3, Amazon DynamoDB |
-| AI/ML | Amazon Rekognition, Amazon Bedrock (Titan Embeddings, Google Gemma 3 12B IT, Claude Opus 4.7 — cheque OCR) |
-| External APIs | Razorpay public IFSC API (`ifsc.razorpay.com`) |
+| AI/ML | Amazon Rekognition, Amazon Bedrock (Titan Image Embeddings) |
 | IaC | AWS CDK (TypeScript) |
 | Region | ap-south-1 (Mumbai) |
 
@@ -49,9 +38,7 @@ mnre-solar-panel-poc/
 │   │   ├── components/
 │   │   │   ├── ImageUpload.tsx           # Drag-and-drop upload
 │   │   │   ├── SubmissionsList.tsx       # Submissions list with live updates
-│   │   │   ├── SubmissionDetail.tsx      # Pipeline visualization + cheque hand-off
-│   │   │   ├── ChequeUpload.tsx          # Cancelled-cheque upload (post-ACCEPTED)
-│   │   │   ├── ChequeValidationPanel.tsx # OCR/IFSC results + manual review controls
+│   │   │   ├── SubmissionDetail.tsx      # Pipeline visualization
 │   │   │   ├── DashboardStats.tsx        # Stats dashboard
 │   │   │   ├── SolarScene.tsx            # Animated solar scene
 │   │   │   ├── StatusBadge.tsx           # Animated status badges
@@ -65,19 +52,12 @@ mnre-solar-panel-poc/
 │   ├── confirm_upload/           # S3 verification + image Step Function start
 │   ├── quality_check/            # Rekognition-based validation
 │   ├── duplication_check/        # Titan embedding similarity
-│   ├── custom_checks/            # Gemma 3 12B IT vision analysis
 │   ├── index_image/              # Embedding storage for future lookups
 │   ├── store_result/             # Final image status persistence
 │   ├── get_status/               # Status retrieval + auto-expiry
-│   ├── cheque_upload/            # Pre-signed URL generation (cheque)
-│   ├── cheque_confirm/           # Starts ChequeStateMachine
-│   ├── cheque_ocr/               # Claude Opus 4.7 OCR → structured JSON
-│   ├── ifsc_verify/              # GET https://ifsc.razorpay.com/{IFSC}
-│   ├── cheque_decision/          # APPROVED / DECLINED / NEEDS_REVIEW
-│   ├── cheque_review/            # Manual approve/decline endpoint
-│   └── layers/common/            # Shared utilities (Pillow, helpers, name_similarity)
+│   └── layers/common/            # Shared utilities (Pillow, helpers)
+├── deploy.py                     # End-to-end deploy script (wraps CDK)
 ├── mnre-solar-panel-architecture.drawio       # Image pipeline architecture
-├── mnre-cheque-validation-flow.drawio         # Cheque validation flow
 └── README.md
 ```
 
@@ -85,7 +65,7 @@ mnre-solar-panel-poc/
 
 ## Verification Pipeline — Deep Dive
 
-The Step Functions state machine executes these checks sequentially. If any check fails, the submission is immediately rejected and the result is stored. The pipeline processes each submission through 5 stages:
+The Step Functions state machine executes two checks sequentially. If either check fails, the submission is immediately rejected and the result is stored.
 
 ```
 Image Upload
@@ -104,19 +84,13 @@ Image Upload
             │ Pass (<95% similarity)
             ▼
 ┌──────────────────────────┐
-│  Step 3: Custom Checks   │  ← Is the tilt correct? Is the image tampered/watermarked?
-│  (Gemma 3 12B IT Vision) │
-└───────────┬──────────────┘
-            │ Pass (all 3 sub-checks)
-            ▼
-┌──────────────────────────┐
-│  Step 4: Index Image     │  ← Store embedding for future duplicate detection
+│  Step 3: Index Image     │  ← Store embedding for future duplicate detection
 │  (DynamoDB)              │
 └───────────┬──────────────┘
             │
             ▼
 ┌──────────────────────────┐
-│  Step 5: Store Result    │  ← Write ACCEPTED to DynamoDB
+│  Step 4: Store Result    │  ← Write ACCEPTED to DynamoDB
 │  (DynamoDB)              │
 └──────────────────────────┘
 ```
@@ -131,13 +105,13 @@ Image Upload
 
 **How it works:**
 
-1. **Image conversion** — The uploaded image (which may be PNG, WebP, BMP, TIFF, or GIF) is converted to JPEG using Pillow. This normalized JPEG is saved back to S3 as `{original_name}_converted.jpg` and used by all downstream steps. This ensures consistent format handling across the pipeline.
+1. **Image conversion** — The uploaded image (which may be PNG, WebP, BMP, TIFF, or GIF) is converted to JPEG using Pillow. This normalized JPEG is saved back to S3 as `{original_name}_converted.jpg` and used by all downstream steps.
 
-2. **Label detection** — Calls Rekognition `DetectLabels` with up to 25 labels at a minimum 50% confidence. The function searches for solar-panel-related labels including: `Solar Panel`, `Solar Energy`, `Solar Power`, `Electrical Device`, `Power Supply`. It checks both direct label names and their parent categories (e.g., if Rekognition returns `Monocrystalline Panel` with parent `Solar Panel`, it counts). The highest confidence score across all matching labels becomes the `solarPanelConfidence`.
+2. **Label detection** — Calls Rekognition `DetectLabels` and searches for solar-panel-related labels including: `Solar Panel`, `Solar Energy`, `Solar Power`, `Electrical Device`, `Power Supply`. It checks both direct label names and their parent categories. The highest confidence score across all matching labels becomes the `solarPanelConfidence`.
 
 3. **Confidence threshold** — The image passes if `solarPanelConfidence >= 70%`. Below this, the image is rejected with the message: *"Solar panel not detected (confidence: X%)"*.
 
-4. **Content moderation** — Calls Rekognition `DetectModerationLabels` at 75% confidence. If any moderation labels are found (violence, explicit content, etc.), the submission is rejected regardless of solar panel confidence.
+4. **Content moderation** — Calls Rekognition `DetectModerationLabels`. If any moderation labels are found, the submission is rejected regardless of solar panel confidence.
 
 **Output example:**
 ```json
@@ -159,9 +133,7 @@ Image Upload
 
 **How vector embeddings work:**
 
-An image embedding is a mathematical representation of a photo's visual content as a list of 1,024 floating-point numbers (a vector). Amazon Titan Embed Image v1 is a neural network that takes an image as input and outputs this fixed-length vector.
-
-The key property: **visually similar images produce vectors that point in nearly the same direction in 1,024-dimensional space**. Two photos of the same building from the same angle will have nearly identical vectors, while completely different photos will have vectors pointing in very different directions.
+An image embedding is a mathematical representation of a photo's visual content as a list of 1,024 floating-point numbers (a vector). Amazon Titan Embed Image v1 takes an image and outputs this fixed-length vector. Visually similar images produce vectors that point in nearly the same direction in 1,024-dimensional space.
 
 ```
 Photo of rooftop solar panels    →  [0.0234, -0.1567, 0.0891, 0.2341, ...]  (1024 numbers)
@@ -173,19 +145,17 @@ Photo of a cat                   →  [0.8912, 0.0034, -0.4521, 0.1102, ...]  (t
 
 1. **Generate embedding** — The uploaded image is read from S3, base64-encoded, and sent to `amazon.titan-embed-image-v1` via Bedrock. The model returns a 1,024-dimensional vector.
 
-2. **Scan existing embeddings** — All previously stored embeddings are loaded from the Embeddings DynamoDB table using a full table scan (with pagination for large datasets).
+2. **Scan existing embeddings** — All previously stored embeddings are loaded from the Embeddings DynamoDB table using a full table scan (with pagination).
 
-3. **Cosine similarity comparison** — The new embedding is compared against every stored embedding using cosine similarity:
+3. **Cosine similarity comparison** — The new embedding is compared against every stored embedding:
 
    ```
    cosine_similarity(A, B) = (A · B) / (|A| × |B|)
    ```
 
-   This measures the cosine of the angle between two vectors. The result ranges from -1 to 1, where 1 means identical direction (identical images) and 0 means completely unrelated.
+4. **Threshold check** — If the maximum similarity exceeds **0.95 (95%)**, the image is flagged as a duplicate.
 
-4. **Threshold check** — If the maximum similarity across all stored embeddings exceeds **0.95 (95%)**, the image is flagged as a duplicate. The matched image ID is returned for reference.
-
-5. **Pass embedding forward** — The computed embedding is included in the output so that Step 4 (Index Image) can store it without re-computing.
+5. **Pass embedding forward** — The computed embedding is included in the output so that Step 3 (Index Image) can store it without re-computing.
 
 **Output example:**
 ```json
@@ -197,120 +167,33 @@ Photo of a cat                   →  [0.8912, 0.0034, -0.4521, 0.1102, ...]  (t
 }
 ```
 
-**Scaling note:** The current implementation performs a full DynamoDB scan and in-memory comparison for every check. This works for POC-scale (hundreds of images) but would need to be replaced with a vector database (e.g., Aurora PostgreSQL with pgvector, or OpenSearch) for production-scale workloads with thousands of embeddings.
+**Scaling note:** The current implementation performs a full DynamoDB scan and in-memory comparison for every check. This works for POC-scale (hundreds of images) but would need a vector database (e.g., Aurora PostgreSQL with pgvector, or OpenSearch) for production-scale workloads.
 
 ---
 
-### Step 3: Custom Checks (Gemma 3 12B IT Vision)
-
-**Lambda:** `lambdas/custom_checks/handler.py`
-
-**Purpose:** Perform intelligent visual analysis that goes beyond what Rekognition can do — checking the physical installation angle, detecting image tampering, and identifying watermarks/internet-sourced images.
-
-**Model:** Google Gemma 3 12B IT, invoked via the Amazon Bedrock Converse API (`bedrock.converse()`). The Converse API provides a unified request/response format across all Bedrock models, so swapping the model only requires changing the model ID.
-
-**How it works:**
-
-The Lambda reads the image from S3, passes it as raw bytes to Gemma along with a detailed analysis prompt, and parses the structured JSON response. The model performs three sub-checks:
-
-#### Sub-check 3a: Inclination (Panel Tilt Angle)
-
-The model estimates the tilt angle of the solar panels from horizontal by analyzing the perspective and geometry in the image. Per MNRE guidelines, the optimal tilt for India is approximately 30 degrees, with an acceptable range of **20-40 degrees**.
-
-- **Pass:** Estimated angle is between 20° and 40°
-- **Fail:** Angle is outside this range (e.g., panels are flat or too steep)
-
-#### Sub-check 3b: Image Authenticity
-
-The model examines the image for signs of digital manipulation:
-- Inconsistent lighting or shadows
-- Warping or distortion artifacts
-- Clone stamping patterns
-- Unnatural edge boundaries around the solar panels
-- Compression artifacts inconsistent with a single capture
-- Signs of image compositing or splicing
-
-- **Pass:** `is_authentic = true`
-- **Fail:** `is_authentic = false` with a list of `manipulation_signs`
-
-#### Sub-check 3c: Watermark & Internet Sourcing
-
-The model checks for concrete visual evidence that the image was downloaded from the internet rather than photographed at an actual installation site:
-- Visible watermark text, logos, or semi-transparent stamps
-- Stock photo agency identifiers (Getty, Shutterstock, iStock, Adobe Stock text/logos)
-- Visible URL or website text embedded in the image
-- Screenshot artifacts (browser chrome, address bars, UI elements)
-
-This check is intentionally strict about what counts as evidence — high image quality, good lighting, or professional composition alone are **not** flagged. Only explicit visual proof of watermarks or internet sourcing triggers a failure.
-
-- **Pass:** `has_watermark = false` AND `is_internet_sourced = false`
-- **Fail:** Either flag is `true`
-
-**The overall custom check passes only if all three sub-checks pass.**
-
-**Output example:**
-```json
-{
-  "passed": true,
-  "inclination": {
-    "estimated_angle": 35,
-    "acceptable": true,
-    "confidence": "high",
-    "notes": "Panel tilt is approximately 35 degrees, within the MNRE acceptable range."
-  },
-  "authenticity": {
-    "is_authentic": true,
-    "confidence": "high",
-    "manipulation_signs": [],
-    "notes": "Image shows consistent lighting, natural shadows, and no signs of manipulation."
-  },
-  "watermark": {
-    "has_watermark": false,
-    "is_internet_sourced": false,
-    "confidence": "high",
-    "detected_marks": [],
-    "notes": "No watermarks, stock agency marks, or internet sourcing indicators found."
-  },
-  "reason": null
-}
-```
-
----
-
-### Step 4: Index Image
+### Step 3: Index Image
 
 **Lambda:** `lambdas/index_image/handler.py`
 
 **Purpose:** Store the image's vector embedding in DynamoDB so future submissions can be checked for duplicates against it.
 
-**How it works:**
-
-1. Retrieves the embedding (1,024 floats) from the duplication check result that was passed through the pipeline state.
-2. Generates a new UUID as the `imageId`.
-3. Converts each float to `Decimal` (DynamoDB doesn't support float types natively).
-4. Stores the record in the Embeddings table linking `imageId`, `submissionId`, `s3Key`, the embedding vector, and a timestamp.
-
-This step only executes for **accepted** submissions — rejected images are not indexed, so they won't affect future duplicate comparisons.
+Retrieves the embedding from the duplication check result, generates a UUID `imageId`, converts each float to `Decimal`, and stores the record linking `imageId`, `submissionId`, `s3Key`, the embedding, and a timestamp. This step only executes for **accepted** submissions.
 
 ---
 
-### Step 5: Store Result
+### Step 4: Store Result
 
 **Lambda:** `lambdas/store_result/handler.py`
 
-**Purpose:** Write the final ACCEPTED or REJECTED status to the Submissions DynamoDB table, along with all check results and a completion timestamp.
-
-This Lambda is also invoked by the error-handling paths — if any pipeline step throws an exception, the Step Functions Catch block routes to this function to record the failure.
+**Purpose:** Write the final ACCEPTED or REJECTED status to the Submissions DynamoDB table, along with all check results and a completion timestamp. Also invoked by the error-handling paths — if any pipeline step throws, the Step Functions Catch block routes here to record the failure.
 
 ---
 
 ### Error Handling & Auto-Expiry
 
-- **Step-level error handling:** Every pipeline step (Quality Check, Duplication Check, Custom Checks, Index Image) has a `Catch` block in the Step Functions definition. If a Lambda throws an unhandled exception, the error is caught and routed to a dedicated `StoreErrorResult` task that marks the submission as REJECTED with the error details.
-
-- **Rejection branching:** After each check, a `Choice` state evaluates whether the check passed. If it failed, the pipeline short-circuits to a `RejectXxx → StoreRejectXxx` path, skipping all subsequent checks.
-
-- **Auto-expiry:** The Get Status Lambda includes a 5-minute timeout mechanism. If a submission has been in PENDING or PROCESSING status for more than 5 minutes, it's automatically marked as REJECTED with a timeout reason. This prevents zombie submissions from appearing stuck in the UI.
+- **Step-level error handling:** Every pipeline step has a `Catch` block that routes unhandled exceptions to a `StoreErrorResult` task marking the submission REJECTED with error details.
+- **Rejection branching:** After each check, a `Choice` state short-circuits to a reject path if the check failed, skipping subsequent checks.
+- **Auto-expiry:** The Get Status Lambda marks submissions stuck in PENDING/PROCESSING for more than 5 minutes as REJECTED with a timeout reason.
 
 ---
 
@@ -319,11 +202,9 @@ This Lambda is also invoked by the error-handling paths — if any pipeline step
 - **Drag-and-drop upload** with file preview (supports JPG, PNG, WebP, BMP, TIFF, GIF up to 15MB)
 - **Real-time status polling** — 3s for active submission, 6s for submission list
 - **Animated pipeline visualization** — shows progress through each verification step with pass/fail indicators
-- **Watermark & Internet Sourcing display** — shows watermark detection status and internet-sourced verdict
 - **Toast notifications** — alerts when submissions are accepted or rejected
 - **Dashboard stats** — total, accepted, rejected, and processing counts
 - **Solar-themed animations** — sun, solar panels, energy particles (Framer Motion)
-- **Responsive design** with CSS variable-based theming
 
 ---
 
@@ -335,13 +216,27 @@ This Lambda is also invoked by the error-handling paths — if any pipeline step
 - AWS CDK CLI (`npm install -g aws-cdk`)
 - Bedrock model access enabled in your AWS account for:
   - `amazon.titan-embed-image-v1` (image embeddings for duplication check)
-  - `google.gemma-3-12b-it` (vision model for custom checks)
 
 ---
 
 ## Deployment
 
-### First-time setup
+### One-command deploy (recommended)
+
+```bash
+python3 deploy.py
+```
+
+This installs dependencies, bootstraps CDK, builds the frontend, deploys the stack, wires the API URL into `frontend/.env`, then rebuilds and redeploys so CloudFront serves the API-connected build.
+
+Options:
+
+```bash
+python3 deploy.py --skip-install   # deps already installed
+python3 deploy.py --destroy        # tear everything down
+```
+
+### Manual deploy (CDK directly)
 
 ```bash
 # 1. Install dependencies
@@ -349,42 +244,22 @@ cd frontend && npm install && cd ..
 cd cdk && npm install && cd ..
 
 # 2. Bootstrap CDK (one-time per account/region)
-cd cdk
-npx cdk bootstrap aws://ACCOUNT_ID/ap-south-1
+cd cdk && npx cdk bootstrap aws://ACCOUNT_ID/ap-south-1
 
-# 3. Build frontend (placeholder build for first deploy)
-cd ../frontend
-npm run build
-cd ../cdk
+# 3. Build frontend + deploy
+cd ../frontend && npm run build
+cd ../cdk && npx cdk deploy
 
-# 4. Deploy infrastructure
-npx cdk deploy
-```
-
-### Configure API URL and redeploy
-
-```bash
-# Copy the ApiUrl from CDK outputs
+# 4. Wire API URL and redeploy
 cd ../frontend
 echo "VITE_API_URL=https://xxxxxxxxxx.execute-api.ap-south-1.amazonaws.com/prod/" > .env
 npm run build
-
-# Redeploy to update frontend with API URL
-cd ../cdk
-npx cdk deploy
-```
-
-### Subsequent deployments
-
-```bash
-cd frontend && npm run build && cd ../cdk && npx cdk deploy
+cd ../cdk && npx cdk deploy
 ```
 
 ---
 
 ## CDK Outputs
-
-After deployment, these values are printed:
 
 | Output | Description |
 |--------|-------------|
@@ -434,7 +309,6 @@ After deployment, these values are printed:
 | `rejectionReason` | String | Why the submission was rejected |
 | `qualityCheckResult` | String (JSON) | Rekognition label detection results |
 | `duplicationCheckResult` | String (JSON) | Similarity scores and matched image ID |
-| `customCheckResult` | String (JSON) | Gemma vision analysis (inclination, authenticity, watermark) |
 
 **GSI:** `userId-index` (partition: `userId`, sort: `uploadedAt`)
 
@@ -455,109 +329,16 @@ After deployment, these values are printed:
 The shared `common` layer (`lambdas/layers/common/python/`) includes:
 
 - **`utils.py`** — Response builder, cosine similarity function, timestamp helper, JPEG conversion utility
-- **`constants.py`** — Shared constants (similarity threshold 0.95, min solar panel confidence 70%, inclination range 20-40°, solar panel label list)
+- **`constants.py`** — Shared constants (similarity threshold 0.95, min solar panel confidence 70%, solar panel label list, status values)
 - **Pillow (PIL)** — Image format conversion (compiled for `manylinux2014_x86_64`)
-
----
-
-## Cheque Validation Pipeline — Deep Dive
-
-After an image is `ACCEPTED`, the applicant is prompted to upload a cancelled cheque and type the expected account-holder name. A second, independent Step Functions state machine (`ChequeStateMachine`) runs:
-
-```
-Wait 5s ─► cheque_ocr ─► ifsc_verify ─► cheque_decision ─► paymentStatus written to DDB
-                                                              │
-                                                              ├─► APPROVED       (auto)
-                                                              ├─► DECLINED       (hard fail)
-                                                              └─► NEEDS_REVIEW   (manual review UI)
-```
-
-### Step 1: Cheque OCR (Claude Opus 4.7 via Bedrock)
-
-**Lambda:** `lambdas/cheque_ocr/handler.py`
-
-Invokes Claude Opus 4.7 via the Bedrock Converse API using the **`global.anthropic.claude-opus-4-7`** cross-region inference profile (Opus 4.7 is not available via on-demand throughput — inference profiles are required). One structured-JSON prompt extracts:
-
-- `ifsc`, `accountNumber`, `holderName`, `bankName`, `branch`, `micr`
-- `hasCancelledStamp` (boolean — detects handwritten/stamped "CANCELLED" or "CANCELED")
-- `hasSignature` (boolean)
-- `ocrConfidence` (0.0–1.0)
-
-The handler also validates the IFSC against the canonical regex `^[A-Z]{4}0[A-Z0-9]{6}$` and short-circuits if malformed.
-
-**Region:** Defaults to `ap-south-1`; overridable via CDK context (`-c chequeBedrockRegion=us-east-1 -c chequeModelId=us.anthropic.claude-opus-4-7`).
-
-### Step 2: IFSC Verify (Razorpay public API)
-
-**Lambda:** `lambdas/ifsc_verify/handler.py`
-
-Pure-Python `urllib.request` GET to `https://ifsc.razorpay.com/{IFSC}` (no API key required). Maps the response to:
-
-- `verified: true/false`
-- `bank`, `branch`, `address`, `city`, `state`, `micr`
-- `imps`, `neft`, `rtgs`, `upi` (capability flags)
-
-A 404 from Razorpay → `verified: false` with `error: "IFSC not found"`. Network errors are captured similarly.
-
-### Step 3: Cheque Decision
-
-**Lambda:** `lambdas/cheque_decision/handler.py`
-
-Combines the OCR fields, the IFSC API response, and the applicant's typed `expectedHolderName` to compute a final decision. Uses **token-set Jaccard similarity** (`name_similarity` in `lambdas/layers/common/python/utils.py`) — handles word ordering and case naturally, no extra deps.
-
-| Check | Hard fail → DECLINED | Soft fail → NEEDS_REVIEW | Pass |
-|---|---|---|---|
-| Razorpay IFSC API | non-200 / 404 | — | 200 + valid data |
-| `CANCELLED` stamp on cheque | not detected | — | detected by Opus |
-| Account number | empty / <9 digits / non-digits | — | valid digit string |
-| Bank name (cheque vs IFSC API) | — | Jaccard < 0.85 | ≥ 0.85 |
-| Holder name (cheque vs applicant input) | — | Jaccard < 0.70 | ≥ 0.70 |
-| Overall OCR confidence | — | < 0.60 | ≥ 0.60 |
-
-Any hard fail → `DECLINED`. No hard fails but ≥1 soft fail → `NEEDS_REVIEW`. Else → `APPROVED`.
-
-The lambda writes both `paymentStatus` and a full `chequeValidationResult` JSON onto the existing Submissions row — no new table.
-
-### Step 4: Manual Review (NEEDS_REVIEW path)
-
-**Lambda:** `lambdas/cheque_review/handler.py` · **API:** `POST /cheque-review/{submissionId}`
-
-The frontend (`ChequeValidationPanel.tsx`) renders an inline Approve/Decline panel when `paymentStatus === 'NEEDS_REVIEW'`. The reviewer's name and free-form notes are persisted to `paymentReviewedBy` / `paymentReviewNotes`. The endpoint refuses to act unless the row is currently in `NEEDS_REVIEW` (idempotent).
-
-### Holder-name validation: what's caught vs what's not
-
-The Razorpay **public** IFSC API does **not** return account holder names — banks don't expose that publicly. The current implementation:
-
-- ✅ Catches obvious mismatches between the typed applicant name and the name printed on the cheque
-- ✅ Catches wrong cheque uploaded by accident (different person's name printed on it)
-- ✅ Catches non-existent IFSCs and missing CANCELLED stamps
-- ❌ **Does NOT confirm the typed name belongs to that account number at the bank**
-
-**Future work — penny-drop verification.** For true name↔account binding, integrate Razorpay's **Bank Account Verification (Fund Account Validation) API** — it triggers a ₹1 IMPS test transaction and returns the bank's `registered_name`. That would slot in as a new `account_verify` step between `ifsc_verify` and `cheque_decision`. Requires a RazorpayX business account, manual API activation, and `key_id`/`key_secret` stored in AWS Secrets Manager. Not implemented in this POC.
-
-### IAM notes (Opus 4.7 inference profile)
-
-Bedrock requires permissions on **both** the inference profile ARN and the underlying foundation model ARN it routes to. The CDK policy is:
-
-```typescript
-chequeOcrFn.addToRolePolicy(new iam.PolicyStatement({
-  actions: ['bedrock:InvokeModel', 'bedrock:Converse'],
-  resources: [
-    `arn:aws:bedrock:${region}:${account}:inference-profile/${chequeModelId}`,
-    `arn:aws:bedrock:*::foundation-model/anthropic.claude-opus-4-7*`,
-  ],
-}));
-```
-
-The foundation-model ARN is left wildcard because Global inference profiles route across regions.
 
 ---
 
 ## Cleanup
 
 ```bash
-cd cdk
-npx cdk destroy
+python3 deploy.py --destroy
+# or: cd cdk && npx cdk destroy
 ```
 
 This removes all AWS resources including S3 buckets (with `RemovalPolicy.DESTROY` and `autoDeleteObjects`).

@@ -51,12 +51,6 @@ def lambda_handler(event, context):
         dc.pop('passed', None)
         expr_values[':dc'] = json.dumps(dc)
 
-    if 'customCheckResult' in event:
-        update_expr += ', customCheckResult = :cc'
-        cc = event['customCheckResult'].copy()
-        cc.pop('passed', None)
-        expr_values[':cc'] = json.dumps(cc)
-
     table.update_item(
         Key={'submissionId': submission_id},
         UpdateExpression=update_expr,

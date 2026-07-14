@@ -1,12 +1,9 @@
 import { motion, AnimatePresence } from 'framer-motion';
 import type { Submission } from '../types';
 import StatusBadge from './StatusBadge';
-import ChequeUpload from './ChequeUpload';
-import ChequeValidationPanel from './ChequeValidationPanel';
 
 interface SubmissionDetailProps {
   submission: Submission;
-  onChequeChange?: () => void;
 }
 
 type StepStatus = 'pass' | 'fail' | 'active' | 'pending';
@@ -74,8 +71,8 @@ function PipelineStep({ status, index, title, subtitle, children }: {
   );
 }
 
-export default function SubmissionDetail({ submission, onChequeChange }: SubmissionDetailProps) {
-  const { qualityCheckResult, duplicationCheckResult, customCheckResult } = submission;
+export default function SubmissionDetail({ submission }: SubmissionDetailProps) {
+  const { qualityCheckResult, duplicationCheckResult } = submission;
   const isProcessing = submission.status === 'PROCESSING' || submission.status === 'PENDING';
 
   const qualityStatus = getStepStatus(
@@ -88,14 +85,7 @@ export default function SubmissionDetail({ submission, onChequeChange }: Submiss
   );
   const duplicationPassed = duplicationCheckResult ? duplicationCheckResult.maxSimilarity < 0.95 : false;
 
-  const customPassed = customCheckResult
-    ? customCheckResult.inclination?.acceptable && customCheckResult.authenticity?.is_authentic && !customCheckResult.watermark?.has_watermark && !customCheckResult.watermark?.is_internet_sourced
-    : false;
-  const customStatus = getStepStatus(
-    customCheckResult ? { passed: customPassed } : undefined,
-    qualityPassed && duplicationPassed, isProcessing,
-  );
-  const allPassed = qualityPassed && duplicationPassed && customPassed;
+  const allPassed = qualityPassed && duplicationPassed;
 
   const indexStatus: StepStatus = allPassed ? 'pass' : 'pending';
   const finalStatus: StepStatus = submission.status === 'ACCEPTED' ? 'pass' : submission.status === 'REJECTED' ? 'fail' : 'pending';
@@ -186,81 +176,13 @@ export default function SubmissionDetail({ submission, onChequeChange }: Submiss
           ) : null}
         </PipelineStep>
 
-        <PipelineStep status={customStatus} index={2} title="Custom Checks" subtitle="Gemma 3 12B IT">
-          {customCheckResult ? (
-            <div className="pipeline-detail">
-              {customCheckResult.inclination && (
-                <>
-                  <p>
-                    <strong>Inclination: </strong>
-                    <span className={`metric-value ${customCheckResult.inclination.acceptable ? 'pass' : 'fail'}`}>
-                      {customCheckResult.inclination.estimated_angle}°
-                    </span>
-                    <span className="metric-unit"> (20-40° range)</span>
-                  </p>
-                  {customCheckResult.inclination.notes && <p className="notes-text">{customCheckResult.inclination.notes}</p>}
-                </>
-              )}
-              {customCheckResult.authenticity && (
-                <>
-                  <p style={{ marginTop: '0.4rem' }}>
-                    <strong>Authenticity: </strong>
-                    <span className={`metric-value ${customCheckResult.authenticity.is_authentic ? 'pass' : 'fail'}`}>
-                      {customCheckResult.authenticity.is_authentic ? 'Authentic' : 'Manipulated'}
-                    </span>
-                    <span className="metric-unit"> ({customCheckResult.authenticity.confidence})</span>
-                  </p>
-                  {customCheckResult.authenticity.manipulation_signs.length > 0 && (
-                    <div className="labels">
-                      {customCheckResult.authenticity.manipulation_signs.map((s) => (
-                        <span key={s} className="label-tag danger">{s}</span>
-                      ))}
-                    </div>
-                  )}
-                  {customCheckResult.authenticity.notes && <p className="notes-text">{customCheckResult.authenticity.notes}</p>}
-                </>
-              )}
-              {customCheckResult.watermark && (
-                <>
-                  <p style={{ marginTop: '0.4rem' }}>
-                    <strong>Watermark: </strong>
-                    <span className={`metric-value ${!customCheckResult.watermark.has_watermark ? 'pass' : 'fail'}`}>
-                      {customCheckResult.watermark.has_watermark ? 'Detected' : 'None'}
-                    </span>
-                    <span className="metric-unit"> ({customCheckResult.watermark.confidence})</span>
-                  </p>
-                  <p style={{ marginTop: '0.2rem' }}>
-                    <strong>Internet Sourced: </strong>
-                    <span className={`metric-value ${!customCheckResult.watermark.is_internet_sourced ? 'pass' : 'fail'}`}>
-                      {customCheckResult.watermark.is_internet_sourced ? 'Yes' : 'No'}
-                    </span>
-                  </p>
-                  {customCheckResult.watermark.detected_marks.length > 0 && (
-                    <div className="labels">
-                      {customCheckResult.watermark.detected_marks.map((m) => (
-                        <span key={m} className="label-tag danger">{m}</span>
-                      ))}
-                    </div>
-                  )}
-                  {customCheckResult.watermark.notes && <p className="notes-text">{customCheckResult.watermark.notes}</p>}
-                </>
-              )}
-              {customCheckResult.reason && (
-                <p style={{ marginTop: '0.4rem', color: 'var(--red-600)', fontSize: '0.75rem' }}>{customCheckResult.reason}</p>
-              )}
-            </div>
-          ) : customStatus === 'active' ? (
-            <div className="pipeline-detail"><div className="skeleton skeleton-text" /><div className="skeleton skeleton-text-sm" style={{ marginTop: 5 }} /><div className="skeleton skeleton-text" style={{ marginTop: 7, width: '50%' }} /></div>
-          ) : null}
-        </PipelineStep>
-
-        <PipelineStep status={indexStatus} index={3} title="Vector Indexing" subtitle="Titan Embeddings">
+        <PipelineStep status={indexStatus} index={2} title="Vector Indexing" subtitle="Titan Embeddings">
           {indexStatus === 'pass' ? (
             <div className="pipeline-detail"><p>Image embedded and indexed for future duplication checks</p></div>
           ) : null}
         </PipelineStep>
 
-        <PipelineStep status={finalStatus} index={4} title={submission.status === 'ACCEPTED' ? 'Accepted' : submission.status === 'REJECTED' ? 'Rejected' : 'Final Decision'} subtitle="Store Result">
+        <PipelineStep status={finalStatus} index={3} title={submission.status === 'ACCEPTED' ? 'Accepted' : submission.status === 'REJECTED' ? 'Rejected' : 'Final Decision'} subtitle="Store Result">
           {(submission.status === 'ACCEPTED' || submission.status === 'REJECTED') ? (
             <div className="pipeline-detail">
               <p>{submission.status === 'ACCEPTED' ? 'All verification checks passed successfully' : 'Submission rejected — see details above'}</p>
@@ -268,25 +190,6 @@ export default function SubmissionDetail({ submission, onChequeChange }: Submiss
           ) : null}
         </PipelineStep>
       </div>
-
-      {submission.status === 'ACCEPTED' && (!submission.paymentStatus || submission.paymentStatus === 'PENDING_CHEQUE') && (
-        <ChequeUpload
-          submissionId={submission.submissionId}
-          onUploadComplete={() => onChequeChange?.()}
-        />
-      )}
-
-      {submission.status === 'ACCEPTED' && submission.paymentStatus && submission.paymentStatus !== 'PENDING_CHEQUE' && (
-        <ChequeValidationPanel
-          submissionId={submission.submissionId}
-          paymentStatus={submission.paymentStatus}
-          result={submission.chequeValidationResult}
-          expectedHolderName={submission.expectedHolderName}
-          reviewedBy={submission.paymentReviewedBy}
-          reviewNotes={submission.paymentReviewNotes}
-          onReviewSubmitted={() => onChequeChange?.()}
-        />
-      )}
     </div>
   );
 }
