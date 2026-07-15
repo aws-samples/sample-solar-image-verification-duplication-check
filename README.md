@@ -6,7 +6,7 @@ A serverless AWS application for the **Ministry of New and Renewable Energy (MNR
 
 ## What It Does
 
-1. User uploads a solar panel installation image through the web portal (hosted on AWS Amplify, ap-south-1).
+1. User uploads a solar panel installation image through the web portal (hosted on AWS Amplify, ap-south-1) — or drops images directly into the batch intake S3 bucket for bulk processing.
 2. Quality Check (Amazon Rekognition) confirms the image actually shows a solar panel and screens for inappropriate content.
 3. Duplication Check generates a Titan image embedding and runs an indexed pgvector nearest-neighbor search against RDS PostgreSQL to detect resubmitted images.
 4. Accepted images are indexed — the embedding is inserted into PostgreSQL so future submissions are checked against it.
@@ -73,6 +73,7 @@ mnre-solar-panel-poc/
 │   ├── index_image/                   # INSERT embedding into image_embeddings
 │   ├── store_result/                  # Final status UPDATE
 │   ├── get_status/                    # Status retrieval + auto-expiry
+│   ├── batch_intake/                  # S3 event notification → pipeline (bulk uploads)
 │   ├── db_init/                       # CFN custom resource: pgvector + schema bootstrap
 │   └── layers/common/                 # Shared layer: utils, db helper, Pillow, psycopg
 ├── test-images/                       # Sample images for pipeline testing
@@ -280,7 +281,8 @@ cd ..
 | `ApiUrl` | REST API Gateway endpoint |
 | `FrontendUrl` | Amplify-hosted frontend URL |
 | `AmplifyAppId` | Amplify app ID (used by deploy.py to publish) |
-| `ImageBucketName` | S3 bucket for uploaded images |
+| `ImageBucketName` | S3 bucket for portal uploads (pre-signed URLs) |
+| `BatchIntakeBucketName` | S3 bucket for direct/bulk uploads (event-triggered) |
 | `DbEndpoint` | RDS PostgreSQL endpoint |
 | `DbSecretArn` | Secrets Manager ARN holding DB credentials |
 | `StateMachineArn` | Step Functions state machine ARN |
@@ -298,6 +300,29 @@ python3 temp/e2e_test.py test-images/test2.png   # new image   → ACCEPTED
 ```
 
 Or use the portal UI at the `FrontendUrl` output — drag-and-drop an image and watch the pipeline visualization update live.
+
+---
+
+## Batch Processing (bulk / legacy image validation)
+
+For large existing image sets (thousands of legacy images), skip the portal entirely and upload directly to the batch intake bucket. Every object created fires an S3 event notification → `batch_intake` Lambda → same verification pipeline. No manual front-end interaction needed.
+
+```bash
+# Single image
+aws s3 cp image.png s3://<BatchIntakeBucketName>/batch/image.png
+
+# Bulk: sync an entire local folder — each object triggers its own pipeline run
+aws s3 sync ./legacy-images/ s3://<BatchIntakeBucketName>/legacy/
+```
+
+Behavior:
+
+- Each uploaded image gets its own submission (`userId = batch-upload`) and runs Quality Check → Duplication Check → Index → Store, identical to portal uploads.
+- Results are queryable via the API (`GET /submissions?userId=batch-upload`) or visible in the portal by entering `batch-upload` as the User ID.
+- Non-image objects are ignored; the pipeline's own `_converted.jpg` artifacts are skipped to prevent event loops.
+- Duplicates within the batch are caught the same way — the first accepted copy is indexed, subsequent identical images are rejected.
+
+Throughput note: each image runs an independent Step Functions execution, so batches process in parallel (bounded by Lambda concurrency and Bedrock/Rekognition quotas). For very large migrations (100k+ images), consider requesting service quota increases first.
 
 ---
 

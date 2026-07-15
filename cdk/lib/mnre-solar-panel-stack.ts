@@ -1,5 +1,6 @@
 import * as cdk from 'aws-cdk-lib';
 import * as s3 from 'aws-cdk-lib/aws-s3';
+import * as s3n from 'aws-cdk-lib/aws-s3-notifications';
 import * as ec2 from 'aws-cdk-lib/aws-ec2';
 import * as rds from 'aws-cdk-lib/aws-rds';
 import * as lambda from 'aws-cdk-lib/aws-lambda';
@@ -62,6 +63,13 @@ export class MnreSolarPanelStack extends cdk.Stack {
           maxAge: 3600,
         },
       ],
+    });
+
+    // ─── S3 Bucket for batch intake (direct/bulk uploads, S3 event triggered) ───
+    const batchBucket = new s3.Bucket(this, 'BatchIntakeBucket', {
+      removalPolicy: cdk.RemovalPolicy.DESTROY,
+      autoDeleteObjects: true,
+      blockPublicAccess: s3.BlockPublicAccess.BLOCK_ALL,
     });
 
     // ─── RDS PostgreSQL (pgvector) ───
@@ -304,6 +312,28 @@ export class MnreSolarPanelStack extends cdk.Stack {
     stateMachine.grantStartExecution(confirmUploadFn);
     confirmUploadFn.addEnvironment('STATE_MACHINE_ARN', stateMachine.stateMachineArn);
 
+    // ─── Lambda: Batch Intake (S3 event notification → pipeline) ───
+    const batchIntakeFn = new lambda.Function(this, 'BatchIntakeFunction', {
+      ...lambdaDefaults,
+      timeout: cdk.Duration.seconds(60),
+      code: lambda.Code.fromAsset(path.join(__dirname, '../../lambdas/batch_intake')),
+      handler: 'handler.lambda_handler',
+      environment: { ...dbEnv, STATE_MACHINE_ARN: stateMachine.stateMachineArn },
+    });
+    dbSecret.grantRead(batchIntakeFn);
+    stateMachine.grantStartExecution(batchIntakeFn);
+    // Pipeline lambdas read/write objects in the batch bucket (quality_check
+    // also writes the converted JPEG back to the source bucket).
+    batchBucket.grantRead(batchIntakeFn);
+    batchBucket.grantReadWrite(qualityCheckFn);
+    batchBucket.grantRead(duplicationCheckFn);
+
+    // S3 event notification: any object created in the batch bucket starts the pipeline
+    batchBucket.addEventNotification(
+      s3.EventType.OBJECT_CREATED,
+      new s3n.LambdaDestination(batchIntakeFn),
+    );
+
     // ─── API Gateway ───
     const api = new apigateway.RestApi(this, 'MnreApi', {
       restApiName: 'MNRE Solar Panel API',
@@ -350,6 +380,7 @@ export class MnreSolarPanelStack extends cdk.Stack {
     new cdk.CfnOutput(this, 'AmplifyAppId', { value: amplifyApp.attrAppId });
     new cdk.CfnOutput(this, 'FrontendUrl', { value: `https://main.${amplifyApp.attrDefaultDomain}` });
     new cdk.CfnOutput(this, 'ImageBucketName', { value: imageBucket.bucketName });
+    new cdk.CfnOutput(this, 'BatchIntakeBucketName', { value: batchBucket.bucketName });
     new cdk.CfnOutput(this, 'DbEndpoint', { value: database.dbInstanceEndpointAddress });
     new cdk.CfnOutput(this, 'DbSecretArn', { value: dbSecret.secretArn });
     new cdk.CfnOutput(this, 'StateMachineArn', { value: stateMachine.stateMachineArn });
