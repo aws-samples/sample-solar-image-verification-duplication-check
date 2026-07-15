@@ -4,15 +4,12 @@ import os
 import boto3
 
 from utils import build_response
+from db import get_connection
 
 s3 = boto3.client('s3')
 sfn = boto3.client('stepfunctions')
-dynamodb = boto3.resource('dynamodb')
 
-SUBMISSIONS_TABLE = os.environ['SUBMISSIONS_TABLE']
 STATE_MACHINE_ARN = os.environ['STATE_MACHINE_ARN']
-
-table = dynamodb.Table(SUBMISSIONS_TABLE)
 
 
 def lambda_handler(event, context):
@@ -23,12 +20,18 @@ def lambda_handler(event, context):
         if not submission_id:
             return build_response(400, {'error': 'submissionId is required'})
 
-        item = table.get_item(Key={'submissionId': submission_id}).get('Item')
-        if not item:
+        conn = get_connection()
+        with conn.cursor() as cur:
+            cur.execute(
+                'SELECT s3_bucket, s3_key FROM submissions WHERE submission_id = %s',
+                (submission_id,),
+            )
+            row = cur.fetchone()
+
+        if not row:
             return build_response(404, {'error': 'Submission not found'})
 
-        s3_bucket = item['s3Bucket']
-        s3_key = item['s3Key']
+        s3_bucket, s3_key = row
 
         s3.head_object(Bucket=s3_bucket, Key=s3_key)
 

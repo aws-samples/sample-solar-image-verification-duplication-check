@@ -1,20 +1,15 @@
-import os
-
 import boto3
 
-from utils import get_timestamp, ensure_jpeg_bytes
+from utils import ensure_jpeg_bytes
 from constants import (
     MIN_SOLAR_PANEL_CONFIDENCE,
     SOLAR_PANEL_LABELS,
     STATUS_PROCESSING,
 )
+from db import get_connection
 
 rekognition = boto3.client('rekognition')
 s3 = boto3.client('s3')
-dynamodb = boto3.resource('dynamodb')
-
-SUBMISSIONS_TABLE = os.environ['SUBMISSIONS_TABLE']
-table = dynamodb.Table(SUBMISSIONS_TABLE)
 
 
 def lambda_handler(event, context):
@@ -22,12 +17,12 @@ def lambda_handler(event, context):
     s3_bucket = event['s3Bucket']
     s3_key = event['s3Key']
 
-    table.update_item(
-        Key={'submissionId': submission_id},
-        UpdateExpression='SET #s = :s',
-        ExpressionAttributeNames={'#s': 'status'},
-        ExpressionAttributeValues={':s': STATUS_PROCESSING},
-    )
+    conn = get_connection()
+    with conn.cursor() as cur:
+        cur.execute(
+            'UPDATE submissions SET status = %s WHERE submission_id = %s',
+            (STATUS_PROCESSING, submission_id),
+        )
 
     obj = s3.get_object(Bucket=s3_bucket, Key=s3_key)
     image_bytes = obj['Body'].read()

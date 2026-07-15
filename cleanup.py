@@ -23,7 +23,7 @@ ROOT = os.path.dirname(os.path.abspath(__file__))
 CDK_DIR = os.path.join(ROOT, "cdk")
 FRONTEND_DIR = os.path.join(ROOT, "frontend")
 REGION = "ap-south-1"
-STACK_NAME = "MnreSolarPanelPocStack"
+STACK_NAME = "SolarPortalStack"
 
 # Local files produced by deploy.py that are safe to remove on cleanup.
 LOCAL_ARTIFACTS = [

@@ -3,17 +3,23 @@ import os
 import uuid
 
 import boto3
+from botocore.config import Config
 
 from utils import build_response, get_timestamp
 from constants import STATUS_PENDING
+from db import get_connection
 
-s3 = boto3.client('s3')
-dynamodb = boto3.resource('dynamodb')
+# Regional endpoint + SigV4 so presigned URLs point at s3.<region>.amazonaws.com
+# directly. The global endpoint 307-redirects for newly created buckets, which
+# breaks the signature for clients that follow the redirect.
+s3 = boto3.client(
+    's3',
+    region_name=os.environ.get('AWS_REGION', 'ap-south-1'),
+    config=Config(signature_version='s3v4', s3={'addressing_style': 'virtual'}),
+    endpoint_url=f"https://s3.{os.environ.get('AWS_REGION', 'ap-south-1')}.amazonaws.com",
+)
 
 BUCKET_NAME = os.environ['BUCKET_NAME']
-SUBMISSIONS_TABLE = os.environ['SUBMISSIONS_TABLE']
-
-table = dynamodb.Table(SUBMISSIONS_TABLE)
 
 
 def lambda_handler(event, context):
@@ -38,14 +44,16 @@ def lambda_handler(event, context):
             ExpiresIn=300,
         )
 
-        table.put_item(Item={
-            'submissionId': submission_id,
-            'userId': user_id,
-            's3Key': s3_key,
-            's3Bucket': BUCKET_NAME,
-            'status': STATUS_PENDING,
-            'uploadedAt': timestamp,
-        })
+        conn = get_connection()
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                INSERT INTO submissions
+                    (submission_id, user_id, s3_key, s3_bucket, status, uploaded_at)
+                VALUES (%s, %s, %s, %s, %s, %s)
+                """,
+                (submission_id, user_id, s3_key, BUCKET_NAME, STATUS_PENDING, timestamp),
+            )
 
         return build_response(200, {
             'submissionId': submission_id,

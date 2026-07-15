@@ -1,14 +1,11 @@
-import os
 import uuid
-from decimal import Decimal
-
-import boto3
 
 from utils import get_timestamp
+from db import get_connection
 
-dynamodb = boto3.resource('dynamodb')
-EMBEDDINGS_TABLE = os.environ['EMBEDDINGS_TABLE']
-table = dynamodb.Table(EMBEDDINGS_TABLE)
+
+def to_vector_literal(embedding: list[float]) -> str:
+    return '[' + ','.join(str(v) for v in embedding) + ']'
 
 
 def lambda_handler(event, context):
@@ -20,13 +17,18 @@ def lambda_handler(event, context):
         return event
 
     image_id = str(uuid.uuid4())
-    table.put_item(Item={
-        'imageId': image_id,
-        'submissionId': submission_id,
-        's3Key': s3_key,
-        'embedding': [Decimal(str(v)) for v in embedding],
-        'createdAt': get_timestamp(),
-    })
+    vec = to_vector_literal(embedding)
+
+    conn = get_connection()
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            INSERT INTO image_embeddings
+                (image_id, submission_id, s3_key, embedding, created_at)
+            VALUES (%s, %s, %s, %s::vector, %s)
+            """,
+            (image_id, submission_id, s3_key, vec, get_timestamp()),
+        )
 
     event['indexResult'] = {'imageId': image_id, 'indexed': True}
     return event

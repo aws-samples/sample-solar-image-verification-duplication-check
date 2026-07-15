@@ -20,6 +20,7 @@ __pycache__/
 
 # CDK deploy outputs
 cdk/outputs.json
+cdk/cdk.context.json
 
 # Environment
 .env
@@ -45,3 +46,7 @@ SOLAR-ROOFTOP-SUBSIDY-PORTAL-main/
 *.jpg
 *.jpeg
 *.zip
+
+# Test fixtures are committed (exception to the image ignore rules above)
+!test-images/
+!test-images/**

@@ -1,22 +1,13 @@
 import base64
 import json
-import os
 
 import boto3
 
-from utils import cosine_similarity
 from constants import SIMILARITY_THRESHOLD
+from db import get_connection
 
 s3 = boto3.client('s3')
 bedrock = boto3.client('bedrock-runtime')
-dynamodb = boto3.resource('dynamodb')
-
-SUBMISSIONS_TABLE = os.environ['SUBMISSIONS_TABLE']
-EMBEDDINGS_TABLE = os.environ['EMBEDDINGS_TABLE']
-BUCKET_NAME = os.environ['BUCKET_NAME']
-
-submissions_table = dynamodb.Table(SUBMISSIONS_TABLE)
-embeddings_table = dynamodb.Table(EMBEDDINGS_TABLE)
 
 
 def get_image_embedding(bucket: str, key: str) -> list[float]:
@@ -35,14 +26,8 @@ def get_image_embedding(bucket: str, key: str) -> list[float]:
     return result['embedding']
 
 
-def scan_all_embeddings() -> list[dict]:
-    items = []
-    response = embeddings_table.scan()
-    items.extend(response.get('Items', []))
-    while 'LastEvaluatedKey' in response:
-        response = embeddings_table.scan(ExclusiveStartKey=response['LastEvaluatedKey'])
-        items.extend(response.get('Items', []))
-    return items
+def to_vector_literal(embedding: list[float]) -> str:
+    return '[' + ','.join(str(v) for v in embedding) + ']'
 
 
 def lambda_handler(event, context):
@@ -51,23 +36,30 @@ def lambda_handler(event, context):
     s3_key = event['s3Key']
 
     embedding = get_image_embedding(s3_bucket, s3_key)
+    vec = to_vector_literal(embedding)
 
-    existing = scan_all_embeddings()
+    # pgvector cosine distance operator (<=>) with the HNSW index does the
+    # nearest-neighbor search in-database; similarity = 1 - cosine_distance.
+    conn = get_connection()
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT image_id, 1 - (embedding <=> %s::vector) AS similarity
+            FROM image_embeddings
+            ORDER BY embedding <=> %s::vector
+            LIMIT 1
+            """,
+            (vec, vec),
+        )
+        row = cur.fetchone()
 
-    max_similarity = 0.0
-    matched_image_id = None
-
-    for item in existing:
-        stored_embedding = [float(v) for v in item['embedding']]
-        similarity = cosine_similarity(embedding, stored_embedding)
-        if similarity > max_similarity:
-            max_similarity = similarity
-            matched_image_id = item['imageId']
+    max_similarity = float(row[1]) if row else 0.0
+    matched_image_id = str(row[0]) if row else None
 
     passed = max_similarity < SIMILARITY_THRESHOLD
     result = {
         'passed': passed,
-        'maxSimilarity': float(max_similarity),
+        'maxSimilarity': max_similarity,
         'matchedImageId': matched_image_id if not passed else None,
         'embedding': embedding,
     }

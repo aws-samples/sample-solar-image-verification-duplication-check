@@ -1,16 +1,16 @@
 #!/usr/bin/env python3
 """End-to-end deploy for the MNRE Solar Panel Verification Portal.
 
-Wraps the existing AWS CDK app so the whole stack (Lambdas, Step Functions,
-API Gateway, DynamoDB, S3, CloudFront + frontend) deploys with one command.
+Wraps the AWS CDK app so the whole stack (VPC, RDS PostgreSQL + pgvector,
+Lambdas, Step Functions, API Gateway, S3, Amplify frontend hosting) deploys
+with one command.
 
 Flow:
   1. npm install in cdk/ and frontend/
   2. cdk bootstrap (idempotent)
-  3. build frontend (placeholder, so the first cdk deploy has assets)
-  4. cdk deploy  -> capture ApiUrl output
-  5. write frontend/.env with VITE_API_URL
-  6. rebuild frontend + cdk deploy again (CloudFront now serves API-wired build)
+  3. cdk deploy  -> capture ApiUrl + AmplifyAppId outputs
+  4. write frontend/.env with VITE_API_URL, build the frontend
+  5. zip frontend/dist and publish it to Amplify (start-deployment)
 
 Usage:
     python3 deploy.py                 # full deploy
@@ -25,12 +25,16 @@ import json
 import os
 import subprocess
 import sys
+import time
+import zipfile
 
 ROOT = os.path.dirname(os.path.abspath(__file__))
 CDK_DIR = os.path.join(ROOT, "cdk")
 FRONTEND_DIR = os.path.join(ROOT, "frontend")
+DIST_DIR = os.path.join(FRONTEND_DIR, "dist")
 REGION = "ap-south-1"
-STACK_NAME = "MnreSolarPanelPocStack"
+STACK_NAME = "SolarPortalStack"
+AMPLIFY_BRANCH = "main"
 
 
 def run(cmd, cwd, capture=False):
@@ -67,8 +71,11 @@ def build_frontend():
     run(["npm", "run", "build"], FRONTEND_DIR)
 
 
-def cdk_deploy():
-    run(["npx", "cdk", "deploy", "--require-approval", "never", "--outputs-file", "outputs.json"], CDK_DIR)
+def cdk_deploy(context=None):
+    cmd = ["npx", "cdk", "deploy", "--require-approval", "never", "--outputs-file", "outputs.json"]
+    for key, val in (context or {}).items():
+        cmd += ["-c", f"{key}={val}"]
+    run(cmd, CDK_DIR)
     with open(os.path.join(CDK_DIR, "outputs.json")) as f:
         outputs = json.load(f)
     return outputs.get(STACK_NAME, {})
@@ -81,24 +88,76 @@ def write_env(api_url):
     print(f"\nWrote {os.path.relpath(env_path, ROOT)} with VITE_API_URL={api_url}")
 
 
-def deploy(skip_install):
+def zip_dist() -> str:
+    zip_path = os.path.join(FRONTEND_DIR, "dist.zip")
+    if os.path.exists(zip_path):
+        os.remove(zip_path)
+    with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as zf:
+        for dirpath, _dirs, files in os.walk(DIST_DIR):
+            for name in files:
+                full = os.path.join(dirpath, name)
+                zf.write(full, os.path.relpath(full, DIST_DIR))
+    return zip_path
+
+
+def amplify_publish(app_id: str):
+    """Zip frontend/dist and publish it to the Amplify branch (manual deploy)."""
+    zip_path = zip_dist()
+
+    create_out = run([
+        "aws", "amplify", "create-deployment",
+        "--app-id", app_id, "--branch-name", AMPLIFY_BRANCH,
+        "--region", REGION, "--output", "json",
+    ], ROOT, capture=True)
+    dep = json.loads(create_out)
+    job_id, upload_url = dep["jobId"], dep["zipUploadUrl"]
+
+    run(["curl", "-sS", "-X", "PUT", "-H", "Content-Type: application/zip",
+         "--data-binary", f"@{zip_path}", upload_url], ROOT)
+
+    run([
+        "aws", "amplify", "start-deployment",
+        "--app-id", app_id, "--branch-name", AMPLIFY_BRANCH,
+        "--job-id", job_id, "--region", REGION,
+    ], ROOT, capture=True)
+
+    # Poll until the deployment job finishes
+    for _ in range(30):
+        status_out = run([
+            "aws", "amplify", "get-job",
+            "--app-id", app_id, "--branch-name", AMPLIFY_BRANCH,
+            "--job-id", job_id, "--region", REGION, "--output", "json",
+        ], ROOT, capture=True)
+        status = json.loads(status_out)["job"]["summary"]["status"]
+        print(f"  Amplify deployment: {status}")
+        if status == "SUCCEED":
+            os.remove(zip_path)
+            return
+        if status in ("FAILED", "CANCELLED"):
+            print(f"Amplify deployment {status}", file=sys.stderr)
+            sys.exit(1)
+        time.sleep(5)
+    print("Amplify deployment timed out", file=sys.stderr)
+    sys.exit(1)
+
+
+def deploy(skip_install, context=None):
     if not skip_install:
         npm_install()
     bootstrap()
 
-    # First deploy: build placeholder frontend so BucketDeployment has assets,
-    # then provision the stack and read the API URL.
-    build_frontend()
-    outputs = cdk_deploy()
+    # Deploy the stack, then build the frontend against the real API URL and
+    # publish it to Amplify.
+    outputs = cdk_deploy(context)
     api_url = outputs.get("ApiUrl")
-    if not api_url:
-        print("ApiUrl not found in stack outputs", file=sys.stderr)
+    app_id = outputs.get("AmplifyAppId")
+    if not api_url or not app_id:
+        print("ApiUrl / AmplifyAppId not found in stack outputs", file=sys.stderr)
         sys.exit(1)
 
-    # Second deploy: rebuild frontend against the real API URL and re-upload.
     write_env(api_url)
     build_frontend()
-    outputs = cdk_deploy()
+    amplify_publish(app_id)
 
     print("\n\033[1;32mDeployment complete.\033[0m")
     for key, val in outputs.items():
