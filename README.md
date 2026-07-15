@@ -1,4 +1,4 @@
-# MNRE Solar Panel Verification Portal
+# Solar Panel Verification Portal
 
 A serverless AWS application for the **Ministry of New and Renewable Energy (MNRE)** that verifies solar panel installation images submitted for government subsidy claims. The pipeline runs two checks: solar panel detection via Amazon Rekognition, and duplicate-image detection via Amazon Titan image embeddings stored in RDS PostgreSQL with pgvector.
 
