@@ -50,3 +50,7 @@ SOLAR-ROOFTOP-SUBSIDY-PORTAL-main/
 # Test fixtures are committed (exception to the image ignore rules above)
 !test-images/
 !test-images/**
+
+# Documentation assets are committed (architecture diagram, UI screenshots)
+!docs/
+!docs/**
