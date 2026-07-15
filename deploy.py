@@ -31,6 +31,8 @@ import zipfile
 ROOT = os.path.dirname(os.path.abspath(__file__))
 CDK_DIR = os.path.join(ROOT, "cdk")
 FRONTEND_DIR = os.path.join(ROOT, "frontend")
+FRONTEND_SRC_DIR = os.path.join(FRONTEND_DIR, "src")
+VITE_ENV_TYPES = os.path.join(FRONTEND_SRC_DIR, "vite-env.d.ts")
 DIST_DIR = os.path.join(FRONTEND_DIR, "dist")
 REGION = "ap-south-1"
 STACK_NAME = "SolarPortalStack"
@@ -67,7 +69,24 @@ def bootstrap():
     run(["npx", "cdk", "bootstrap", f"aws://{account}/{REGION}"], CDK_DIR)
 
 
+def ensure_vite_env_types():
+    """Write frontend/src/vite-env.d.ts if missing.
+
+    Vite's client types augment ImportMeta with `env` (for VITE_* vars) and
+    declare ambient modules for CSS/asset imports. Without this reference the
+    TypeScript build fails on `import.meta.env.VITE_API_URL` and `import './App.css'`.
+    Idempotent: only writes the file if it doesn't already exist.
+    """
+    if os.path.exists(VITE_ENV_TYPES):
+        return
+    os.makedirs(FRONTEND_SRC_DIR, exist_ok=True)
+    with open(VITE_ENV_TYPES, "w") as f:
+        f.write('/// <reference types="vite/client" />\n')
+    print(f"Wrote {os.path.relpath(VITE_ENV_TYPES, ROOT)} (Vite client type reference)")
+
+
 def build_frontend():
+    ensure_vite_env_types()
     run(["npm", "run", "build"], FRONTEND_DIR)
 
 
