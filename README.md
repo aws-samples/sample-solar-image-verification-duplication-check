@@ -16,45 +16,23 @@ A serverless AWS application for the **Ministry of New and Renewable Energy (MNR
 
 ## Architecture
 
-```
-                        ┌───────────────────┐
-   User Browser ◄─────► │  AWS Amplify      │   (regional app, ap-south-1)
-                        │  (frontend host)  │
-                        └─────────┬─────────┘
-                                  │
-                        ┌─────────▼─────────┐
-                        │   API Gateway     │   (REST)
-                        └─────────┬─────────┘
-       ┌──────────────────────────┼──────────────────────────┐
-  POST /upload              POST /confirm            GET /status/{id}
-       │                          │                  GET /submissions
-       │                          │                          │
-┌──────────────────────── VPC (private-isolated subnets, no NAT) ────────────────────────┐
-│                                                                                         │
-│  ┌──────────┐   ┌─────────────────┐   ┌──────────────┐                                  │
-│  │ Upload λ │   │ ConfirmUpload λ │──►│ Step Functions│                                 │
-│  └────┬─────┘   └───────┬─────────┘   └──────┬───────┘                                  │
-│       │                 │                     ▼                                          │
-│       │   Wait 10s ─► Quality Check ─►[pass?]─► Duplication Check ─►[pass?]─► Index ─► Store
-│       │               (Rekognition)              (Titan + pgvector)                      │
-│       │                     │  fail                    │  fail                           │
-│       │                     ▼                          ▼                                 │
-│       │               Reject + Store             Reject + Store                          │
-│       │                                                                                  │
-│  ┌────▼──────────────────────────────────────────────────────────────┐                   │
-│  │  RDS PostgreSQL 16 + pgvector (db.t3.micro, single-AZ)            │                   │
-│  │  ├── submissions        (status + check results, JSONB)           │                   │
-│  │  └── image_embeddings   (vector(1024), HNSW cosine index)         │                   │
-│  └───────────────────────────────────────────────────────────────────┘                   │
-│                                                                                          │
-│  VPC Endpoints (PrivateLink): S3 (gateway) · Rekognition · Bedrock ·                     │
-│                               Secrets Manager · Step Functions · CloudWatch Logs         │
-└──────────────────────────────────────────────────────────────────────────────────────────┘
+![Architecture](docs/solar-portal-architecture.png)
 
-   S3: uploaded images  |  Bedrock: amazon.titan-embed-image-v1  |  Secrets Manager: DB creds
-```
+Editable source: [`solar-portal-architecture.drawio`](solar-portal-architecture.drawio)
 
 All traffic between Lambdas and AWS services stays on the AWS backbone via VPC endpoints — no NAT gateway, no public egress. This mirrors a future hybrid topology where the data layer runs on Outposts/sovereign infrastructure with private connectivity back to the region for AI inferencing.
+
+---
+
+## Portal UI
+
+Accepted submission — all checks passed, embedding indexed for future duplicate detection:
+
+![Portal UI — Accepted](docs/portal-ui-accepted.png)
+
+Rejected submission — pgvector found an exact duplicate (similarity 100% vs 95% threshold):
+
+![Portal UI — Rejected](docs/portal-ui-rejected.png)
 
 ---
 
