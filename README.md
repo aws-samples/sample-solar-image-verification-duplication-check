@@ -16,7 +16,8 @@ A serverless AWS application for the **Ministry of New and Renewable Energy (MNR
 
 ## Architecture
 
-![Architecture](docs/solar-portal-architecture.png)
+<img width="1547" height="793" alt="image" src="https://github.com/user-attachments/assets/e1f68359-c36e-479b-aacb-935d310759a7" />
+
 
 Editable source: [`solar-portal-architecture.drawio`](solar-portal-architecture.drawio)
 
@@ -32,7 +33,8 @@ Accepted submission — all checks passed, embedding indexed for future duplicat
 
 Rejected submission — pgvector found an exact duplicate (similarity 100% vs 95% threshold):
 
-![Portal UI — Rejected](docs/portal-ui-rejected.png)
+<img width="1480" height="772" alt="image" src="https://github.com/user-attachments/assets/357d37fa-014e-48f1-9251-527924784137" />
+
 
 ---
 
