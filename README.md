@@ -222,7 +222,7 @@ CREATE INDEX ON image_embeddings USING hnsw (embedding vector_cosine_ops);
 
 Both deployment paths use the same AWS CDK stack — the difference is only how the source code reaches the machine that runs the deploy.
 
-### Use Case 1 — Source code delivered as a zip in the customer's S3 bucket
+### Use Case 1 — Source code delivered as a zip in the S3 bucket
 
 Use this when the project is packaged as a zip and dropped into an S3 bucket in the customer's AWS account. The deploy runs from inside the customer account (CloudShell, EC2, or a CI runner with an execution role).
 
