@@ -101,6 +101,8 @@ Lambda: `lambdas/quality_check/handler.py`
 
 Lambda: `lambdas/duplication_check/handler.py`
 
+Why Titan Embeddings: detecting near-duplicates (recompressed, cropped, or resized copies) requires converting each image into a numerical representation where visually similar images produce similar numbers — something only a trained vision model can do, not hand-written code. Titan Embed Image v1 is that model: it encodes each image as a 1,024-dim vector, pgvector then stores and searches those vectors in PostgreSQL. Titan computes vectors; it stores nothing.
+
 1. Sends the image to `amazon.titan-embed-image-v1` (Bedrock) for a 1,024-dim embedding.
 2. Runs a single indexed nearest-neighbor SQL query in PostgreSQL:
 
