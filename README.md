@@ -25,6 +25,14 @@ All traffic between Lambdas and AWS services stays on the AWS backbone via VPC e
 
 ---
 
+## Companion — PM Surya Ghar NLP Chatbot Architecture
+
+A companion chatbot that lets internal users query the subsidy data in natural language. All components run in ap-south-1 (Mumbai) with in-region ON_DEMAND inference for data residency compliance: Amplify static UI → API Gateway (WebSocket) → Strands Agent Lambda → Bedrock (Converse) with AgentCore Memory/MCP, tool calls executed by a read-only Lambda inside the VPC against Aurora PostgreSQL Serverless v2 (SELECT-only, least-privilege IAM, Secrets Manager over VPC endpoint, no NAT). The browser receives natural-language answers only — never raw data.
+
+![Chatbot Architecture](docs/chatbot-architecture.png)
+
+---
+
 ## Portal UI
 
 Accepted submission — all checks passed, embedding indexed for future duplicate detection:
