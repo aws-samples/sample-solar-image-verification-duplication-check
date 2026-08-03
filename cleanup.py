@@ -33,8 +33,10 @@ LOCAL_ARTIFACTS = [
 
 
 def run(cmd, cwd):
+    # Security note: argument-list subprocess (no shell), static commands only.
+    # Operator-run teardown tooling; no external input reaches these calls.
     print(f"\n\033[1;34m$ {' '.join(cmd)}\033[0m  (in {os.path.relpath(cwd, ROOT)})")
-    result = subprocess.run(cmd, cwd=cwd)
+    result = subprocess.run(cmd, cwd=cwd)  # nosec B603
     if result.returncode != 0:
         sys.exit(result.returncode)
 

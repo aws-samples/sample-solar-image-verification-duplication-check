@@ -233,7 +233,7 @@ To package the repo into the zip for S3 (excludes local build/dependency artifac
 
 ```bash
 zip -r solar-rooftop-portal.zip . \
-  -x '*/node_modules/*' '*/cdk.out/*' '*/dist/*' '*.git/*' 'cdk/outputs.json'
+  -x '*/node_modules/*' '*/cdk.out/*' '*/dist/*' '*.git/*' 'cdk/outputs.json' 'temp/*'
 aws s3 cp solar-rooftop-portal.zip s3://<customer-bucket>/<path>/ --region ap-south-1
 ```
 

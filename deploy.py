@@ -40,15 +40,18 @@ AMPLIFY_BRANCH = "main"
 
 
 def run(cmd, cwd, capture=False):
+    # Security note: commands are argument lists (never shell=True), composed of
+    # static strings plus this stack's own CloudFormation outputs. Operator-run
+    # deployment tooling; no external/user input reaches these calls.
     print(f"\n\033[1;34m$ {' '.join(cmd)}\033[0m  (in {os.path.relpath(cwd, ROOT)})")
     if capture:
-        result = subprocess.run(cmd, cwd=cwd, text=True, capture_output=True)
+        result = subprocess.run(cmd, cwd=cwd, text=True, capture_output=True)  # nosec B603
         if result.returncode != 0:
             print(result.stdout)
             print(result.stderr, file=sys.stderr)
             sys.exit(result.returncode)
         return result.stdout
-    result = subprocess.run(cmd, cwd=cwd)
+    result = subprocess.run(cmd, cwd=cwd)  # nosec B603
     if result.returncode != 0:
         sys.exit(result.returncode)
     return None

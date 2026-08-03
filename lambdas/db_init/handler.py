@@ -47,6 +47,10 @@ def _send(event, context, status, reason=''):
     response_url = event.get('ResponseURL')
     if not response_url:
         return
+    # CloudFormation ResponseURLs are always presigned https S3 URLs; reject
+    # anything else (guards against file:// or custom-scheme injection).
+    if not response_url.startswith('https://'):
+        raise ValueError('ResponseURL must be https')
     body = json.dumps({
         'Status': status,
         'Reason': reason or f'See CloudWatch log stream: {context.log_stream_name}',

@@ -1,6 +1,8 @@
 import json
 from datetime import datetime, timezone, timedelta
 
+from psycopg import sql
+
 from utils import build_response, get_timestamp
 from constants import STATUS_REJECTED
 from db import get_connection
@@ -70,14 +72,17 @@ def lambda_handler(event, context):
     path_params = event.get('pathParameters') or {}
     query_params = event.get('queryStringParameters') or {}
 
-    col_list = ', '.join(COLUMNS)
+    # Column list composed with sql.Identifier — never string interpolation.
+    col_sql = sql.SQL(', ').join(sql.Identifier(c) for c in COLUMNS)
     conn = get_connection()
 
     submission_id = path_params.get('submissionId')
     if submission_id:
         with conn.cursor() as cur:
             cur.execute(
-                f'SELECT {col_list} FROM submissions WHERE submission_id = %s',
+                sql.SQL('SELECT {cols} FROM submissions WHERE submission_id = {sid}').format(
+                    cols=col_sql, sid=sql.Placeholder(),
+                ),
                 (submission_id,),
             )
             row = cur.fetchone()
@@ -89,8 +94,10 @@ def lambda_handler(event, context):
     if user_id:
         with conn.cursor() as cur:
             cur.execute(
-                f'SELECT {col_list} FROM submissions WHERE user_id = %s '
-                'ORDER BY uploaded_at DESC',
+                sql.SQL(
+                    'SELECT {cols} FROM submissions WHERE user_id = {uid} '
+                    'ORDER BY uploaded_at DESC'
+                ).format(cols=col_sql, uid=sql.Placeholder()),
                 (user_id,),
             )
             rows = cur.fetchall()
