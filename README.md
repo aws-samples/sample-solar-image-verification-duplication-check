@@ -379,3 +379,9 @@ python3 cleanup.py --keep-local    # keep local .env / outputs.json
 Equivalent: `python3 deploy.py --destroy` or `cd cdk && npx cdk destroy`.
 
 Removes all resources — RDS instance, VPC + endpoints, Lambdas, Step Functions, API Gateway, Amplify app, and S3 buckets (all uploaded images and submission data are deleted).
+
+---
+
+## License
+
+This project is licensed under the MIT-0 License. See the [LICENSE](LICENSE) file.
