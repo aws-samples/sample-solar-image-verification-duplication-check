@@ -16,20 +16,11 @@ A serverless AWS application that verifies solar panel installation images submi
 
 ## Architecture
 
-<img width="1547" height="793" alt="image" src="https://github.com/user-attachments/assets/e1f68359-c36e-479b-aacb-935d310759a7" />
-
+![Architecture](docs/solar-portal-architecture.png)
 
 Editable source: [`solar-portal-architecture.drawio`](solar-portal-architecture.drawio)
 
 All traffic between Lambdas and AWS services stays on the AWS backbone via VPC endpoints — no NAT gateway, no public egress. This mirrors a future hybrid topology where the data layer runs on Outposts/sovereign infrastructure with private connectivity back to the region for AI inferencing.
-
----
-
-## Companion — PM Surya Ghar NLP Chatbot Architecture
-
-A companion chatbot that lets internal users query the subsidy data in natural language. All components run in ap-south-1 (Mumbai) with in-region ON_DEMAND inference for data residency compliance: Amplify static UI → API Gateway (WebSocket) → Strands Agent Lambda → Bedrock (Converse) with AgentCore Memory/MCP, tool calls executed by a read-only Lambda inside the VPC against Aurora PostgreSQL Serverless v2 (SELECT-only, least-privilege IAM, Secrets Manager over VPC endpoint, no NAT). The browser receives natural-language answers only — never raw data.
-
-![Chatbot Architecture](docs/chatbot-architecture.png)
 
 ---
 
